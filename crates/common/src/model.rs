@@ -37,8 +37,12 @@ pub struct BrowserInfo {
 pub enum ClaudeStatus {
     #[default]
     None,
-    Processing { activity: Option<String> },
-    WaitingForInput { question: Option<String> },
+    Processing {
+        activity: Option<String>,
+    },
+    WaitingForInput {
+        question: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
