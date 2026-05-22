@@ -1,0 +1,23 @@
+[package]
+name = "tmux-tabs-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Background daemon for tmux-tabs that tracks tmux sessions and git state."
+
+[[bin]]
+name = "tmux-tabs-server"
+path = "src/main.rs"
+
+[dependencies]
+tmux-tabs-common = { path = "../common" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "macros", "signal", "time", "process", "sync"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true
