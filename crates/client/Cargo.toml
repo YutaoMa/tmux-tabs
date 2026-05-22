@@ -1,0 +1,23 @@
+[package]
+name = "tmux-tabs-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "TUI sidebar and CLI for tmux-tabs."
+
+[[bin]]
+name = "tmux-tabs"
+path = "src/main.rs"
+
+[dependencies]
+tmux-tabs-common = { path = "../common" }
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "macros", "time", "process", "sync", "io-util"] }
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures = "0.3"
+libc = "0.2"
+
+[lints]
+workspace = true
