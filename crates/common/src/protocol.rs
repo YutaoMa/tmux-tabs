@@ -61,7 +61,7 @@ impl std::str::FromStr for ClaudeEvent {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TabGroupInfo {
     pub title: String,
     pub tab_count: u32,

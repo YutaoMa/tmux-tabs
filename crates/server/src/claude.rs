@@ -259,6 +259,10 @@ impl ClaudeTracker {
         self.sessions.get(session_name).and_then(|s| s.context_pct)
     }
 
+    pub fn pane_id(&self, session_name: &str) -> Option<&str> {
+        self.sessions.get(session_name).map(|s| s.pane_id.as_str())
+    }
+
     /// Remove sessions whose pane no longer exists. Returns true if state changed.
     pub fn sweep_dead_panes(&mut self, live: &HashMap<String, String>) -> bool {
         let before = self.sessions.len();
