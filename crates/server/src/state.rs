@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tmux_tabs_common::{ClaudeStatus, ServerMessage, SessionEntry, TmuxSession};
+use tmux_tabs_common::{ClaudeEvent, ServerMessage, SessionEntry, TmuxSession};
 use tokio::sync::{Notify, RwLock, mpsc};
 
+use crate::claude::ClaudeTracker;
 use crate::git::GitTracker;
 
 struct Client {
@@ -18,10 +19,11 @@ struct Client {
 struct State {
     sessions: Vec<TmuxSession>,
     git: GitTracker,
+    claude: ClaudeTracker,
     clients: HashMap<String, Client>,
     /// `pane_id` → `session_name`, refreshed by the tmux poller. Lets the
-    /// server resolve panes (e.g. on client register) without spawning a
-    /// tmux subprocess on the hot path.
+    /// server resolve panes (e.g. on client register or hook event) without
+    /// spawning a tmux subprocess on the hot path.
     pane_sessions: HashMap<String, String>,
 }
 
@@ -37,6 +39,7 @@ impl AppState {
             state: Arc::new(RwLock::new(State {
                 sessions: Vec::new(),
                 git: GitTracker::new(),
+                claude: ClaudeTracker::new(),
                 clients: HashMap::new(),
                 pane_sessions: HashMap::new(),
             })),
@@ -72,14 +75,35 @@ impl AppState {
         state.clients.remove(pane_id);
     }
 
-    /// Replace the pane→session map. Returns true if the new map differs.
+    /// Process a Claude Code hook event. Returns true if state changed.
+    pub async fn handle_claude_event(
+        &self,
+        session_name: &str,
+        pane_id: &str,
+        event: &ClaudeEvent,
+        payload: Option<&str>,
+    ) -> bool {
+        let mut state = self.state.write().await;
+        let changed = state
+            .claude
+            .handle_event(session_name, pane_id, event, payload);
+        if changed {
+            self.notify.notify_waiters();
+        }
+        changed
+    }
+
+    /// Replace the pane→session map and prune Claude state for vanished panes.
+    /// Returns true if anything changed.
     pub async fn refresh_pane_map(&self, panes: HashMap<String, String>) -> bool {
         let mut state = self.state.write().await;
-        if state.pane_sessions == panes {
-            return false;
+        let pane_map_changed = state.pane_sessions != panes;
+        let swept = state.claude.sweep_dead_panes(&panes);
+        let expired = state.claude.expire_stale();
+        if pane_map_changed {
+            state.pane_sessions = panes;
         }
-        state.pane_sessions = panes;
-        true
+        pane_map_changed || swept || expired
     }
 
     pub async fn session_for_pane(&self, pane_id: &str) -> Option<String> {
@@ -117,9 +141,9 @@ impl AppState {
             .iter()
             .map(|s| SessionEntry {
                 session: s.clone(),
-                claude: ClaudeStatus::None,
-                topic: None,
-                context_pct: None,
+                claude: state.claude.status(&s.name),
+                topic: state.claude.topic(&s.name).map(String::from),
+                context_pct: state.claude.context_pct(&s.name),
                 git: state.git.info(&s.name),
                 browser: None,
             })

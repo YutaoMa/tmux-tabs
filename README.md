@@ -47,6 +47,25 @@ Reload tmux (`prefix + :source-file ~/.tmux.conf`) and start a new session — t
 
 The `tmux-tabs-server` daemon starts on demand the first time the sidebar opens.
 
+## Claude Code integration (optional)
+
+To show Claude Code status in the sidebar (processing / waiting indicators, current tool, prompt topic, context-window usage), register the hook script in `~/.claude/settings.json`. Replace `/path/to/tmux-tabs` with your repo clone path:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": "bash /path/to/tmux-tabs/scripts/tmux-tabs-hook.sh prompt_submit", "timeout": 5}]}],
+    "PreToolUse":       [{"matcher": "", "hooks": [{"type": "command", "command": "bash /path/to/tmux-tabs/scripts/tmux-tabs-hook.sh tool_use",      "timeout": 5}]}],
+    "Stop":             [{"matcher": "", "hooks": [{"type": "command", "command": "bash /path/to/tmux-tabs/scripts/tmux-tabs-hook.sh stop",          "timeout": 5}]}],
+    "Notification":     [{"matcher": "", "hooks": [{"type": "command", "command": "bash /path/to/tmux-tabs/scripts/tmux-tabs-hook.sh notification",  "timeout": 5}]}],
+    "SessionStart":     [{"matcher": "", "hooks": [{"type": "command", "command": "bash /path/to/tmux-tabs/scripts/tmux-tabs-hook.sh session_start", "timeout": 5}]}],
+    "SessionEnd":       [{"matcher": "", "hooks": [{"type": "command", "command": "bash /path/to/tmux-tabs/scripts/tmux-tabs-hook.sh session_end",   "timeout": 5}]}]
+  }
+}
+```
+
+The hook script runs `tmux-tabs notify` in the background so it adds essentially no latency to Claude Code's hot path.
+
 ## Usage
 
 Mouse (works regardless of which pane has focus):

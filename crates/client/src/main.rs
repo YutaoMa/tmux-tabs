@@ -2,27 +2,92 @@ mod app;
 mod input;
 mod ui;
 
-use std::io::Write;
+use std::io::{IsTerminal, Read, Write};
 use std::process::Stdio;
 use std::time::Duration;
 
 use tmux_tabs_common::{
-    ClientMessage, Envelope, ServerMessage, SessionEntry, read_frame, socket_path, write_frame,
+    ClaudeEvent, ClientMessage, Envelope, HookNotification, ServerMessage, SessionEntry,
+    read_frame, socket_path, write_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    match args.get(1).map(String::as_str) {
-        Some("server") => cmd_server(&args[2..]).await,
-        Some("kill") => cmd_kill(),
-        Some("switch") => cmd_switch(&args[2..]).await,
-        Some("close") => cmd_close(&args[2..]).await,
-        _ => cmd_tui().await,
+
+    // Hot path: Claude Code hook notifications fire frequently. Dispatch the
+    // sync path before building a tokio runtime so the hook returns ASAP.
+    if args.get(1).map(String::as_str) == Some("notify") {
+        cmd_notify_sync(&args[2..]);
+        return Ok(());
     }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async_main(args))
+}
+
+async fn async_main(args: Vec<String>) -> anyhow::Result<()> {
+    let sub = Subcommand::try_from(&args[1..]).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(2);
+    });
+    match sub {
+        Subcommand::Server { foreground } => cmd_server(foreground).await,
+        Subcommand::Kill => cmd_kill(),
+        Subcommand::Switch { index } => cmd_switch(index).await,
+        Subcommand::Close { session } => cmd_close(session).await,
+        Subcommand::Tui => cmd_tui().await,
+    }
+}
+
+enum Subcommand {
+    Server { foreground: bool },
+    Kill,
+    Switch { index: usize },
+    Close { session: Option<String> },
+    Tui,
+}
+
+impl TryFrom<&[String]> for Subcommand {
+    type Error = anyhow::Error;
+
+    fn try_from(args: &[String]) -> Result<Self, Self::Error> {
+        match args.first().map(String::as_str) {
+            Some("server") => {
+                let foreground = args[1..].iter().any(|a| a == "--foreground");
+                Ok(Self::Server { foreground })
+            }
+            Some("kill") => Ok(Self::Kill),
+            Some("switch") => {
+                let index: usize = args
+                    .get(1)
+                    .and_then(|s| s.parse().ok())
+                    .filter(|&n| n >= 1)
+                    .ok_or_else(|| anyhow::anyhow!("usage: tmux-tabs switch <N>"))?;
+                Ok(Self::Switch { index })
+            }
+            Some("close") => {
+                let session = parse_session_flag(&args[1..]);
+                Ok(Self::Close { session })
+            }
+            _ => Ok(Self::Tui),
+        }
+    }
+}
+
+fn parse_session_flag(args: &[String]) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--session" {
+            return args.get(i + 1).cloned().filter(|s| !s.is_empty());
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Connect to the server, register, and read the initial state snapshot.
@@ -52,16 +117,8 @@ async fn open_state_conn() -> Option<(OwnedReadHalf, OwnedWriteHalf, Vec<Session
     Some((reader, writer, sessions))
 }
 
-/// Jump to the Nth session in tmux-tabs order (1-based).
-async fn cmd_switch(args: &[String]) -> anyhow::Result<()> {
-    let idx: usize = match args.first().and_then(|s| s.parse().ok()) {
-        Some(n) if n >= 1 => n,
-        _ => {
-            eprintln!("usage: tmux-tabs switch <N>");
-            std::process::exit(2);
-        }
-    };
-
+/// Jump to the Nth session in tmux-tabs order (1-based; caller validates index >= 1).
+async fn cmd_switch(idx: usize) -> anyhow::Result<()> {
     let Some((_reader, mut writer, sessions)) = open_state_conn().await else {
         // Silently exit — typically bound to a hot-key, so noise is bad.
         return Ok(());
@@ -80,8 +137,8 @@ async fn cmd_switch(args: &[String]) -> anyhow::Result<()> {
 
 /// Close a tmux session (and its associated Chrome tab group) after a y/n
 /// prompt. Intended to be invoked inside a tmux `display-popup`.
-async fn cmd_close(args: &[String]) -> anyhow::Result<()> {
-    let Some(session_name) = resolve_target_session(args).await else {
+async fn cmd_close(session: Option<String>) -> anyhow::Result<()> {
+    let Some(session_name) = resolve_target_session(session).await else {
         eprintln!("could not resolve target session (not in tmux?)");
         std::process::exit(2);
     };
@@ -145,20 +202,11 @@ async fn cmd_close(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Resolve the target session name for `cmd_close`. Prefers an explicit
-/// `--session <name>` flag and falls back to the current tmux session.
-async fn resolve_target_session(args: &[String]) -> Option<String> {
-    let mut session_name: Option<String> = None;
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--session" {
-            session_name = args.get(i + 1).cloned();
-            i += 2;
-        } else {
-            i += 1;
-        }
-    }
-    if let Some(s) = session_name.filter(|s| !s.is_empty()) {
+/// Resolve the target session name for `cmd_close`: prefer the explicit value
+/// from the `--session` flag (already parsed), fall back to the current tmux
+/// session via `display-message`.
+async fn resolve_target_session(provided: Option<String>) -> Option<String> {
+    if let Some(s) = provided {
         return Some(s);
     }
     let out = tokio::process::Command::new("tmux")
@@ -193,9 +241,90 @@ fn current_pane_id() -> String {
     std::env::var("TMUX_PANE").unwrap_or_else(|_| "%0".to_string())
 }
 
-async fn cmd_server(args: &[String]) -> anyhow::Result<()> {
+/// Send a one-shot Claude Code hook notification to the server. Sync so it
+/// skips the tokio runtime init — the hook script invokes this on every
+/// Claude Code event and needs to return immediately. Best-effort: any I/O
+/// failure is silently swallowed so the hook never blocks Claude Code. Set
+/// `TMUX_TABS_HOOK_DEBUG=1` to log failure points to stderr.
+fn cmd_notify_sync(args: &[String]) {
+    let event_name = args.first().map_or("stop", String::as_str);
+    let event = event_name.parse::<ClaudeEvent>().unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+
+    let debug = std::env::var_os("TMUX_TABS_HOOK_DEBUG").is_some();
+    let log = |msg: &str| {
+        if debug {
+            eprintln!("tmux-tabs notify: {msg}");
+        }
+    };
+
+    // Both flags are optional: the server resolves session name from pane_id
+    // via its cached pane map.
+    let mut pane_id = String::new();
+    let mut session_name = String::new();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--pane" => {
+                pane_id = args.get(i + 1).cloned().unwrap_or_default();
+                i += 2;
+            }
+            "--session" => {
+                session_name = args.get(i + 1).cloned().unwrap_or_default();
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+
+    if pane_id.is_empty() {
+        pane_id = std::env::var("TMUX_PANE").unwrap_or_default();
+    }
+    if pane_id.is_empty() {
+        log("no TMUX_PANE set");
+        return;
+    }
+
+    let sock = socket_path();
+    if !sock.exists() {
+        log("server socket missing — is tmux-tabs-server running?");
+        return;
+    }
+
+    let payload = if std::io::stdin().is_terminal() {
+        None
+    } else {
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf).ok();
+        if buf.is_empty() { None } else { Some(buf) }
+    };
+
+    let notif = Envelope::Hook(HookNotification {
+        tmux_pane_id: pane_id,
+        session_name,
+        event,
+        payload,
+    });
+
+    let Ok(buf) = tmux_tabs_common::encode_frame(&notif) else {
+        log("frame encoding failed");
+        return;
+    };
+
+    let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&sock) else {
+        log("connect to server failed");
+        return;
+    };
+    if let Err(e) = stream.write_all(&buf) {
+        log(&format!("write to server failed: {e}"));
+    }
+}
+
+async fn cmd_server(foreground: bool) -> anyhow::Result<()> {
     let mut cmd = tokio::process::Command::new("tmux-tabs-server");
-    if args.iter().any(|a| a == "--foreground") {
+    if foreground {
         cmd.arg("--foreground");
     }
     cmd.status().await?;
