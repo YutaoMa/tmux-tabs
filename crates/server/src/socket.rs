@@ -1,6 +1,5 @@
-//! Server-side socket protocol. Currently handles `ClientMessage` and drops
-//! `Envelope::Hook` / `Envelope::Bridge` — Claude Code and Chrome bridge
-//! integrations land in later PRs along with their senders.
+//! Server-side socket protocol. Handles `ClientMessage` and `Envelope::Hook`;
+//! the Chrome bridge integration lands in a later PR along with its sender.
 
 use tmux_tabs_common::{ClientMessage, Envelope, HookNotification, read_frame, write_frame};
 use tokio::net::{UnixListener, UnixStream};
@@ -36,7 +35,7 @@ async fn handle_connection(stream: UnixStream, state: AppState) -> anyhow::Resul
 
     match envelope {
         Envelope::Hook(notif) => {
-            log_dropped_hook(&notif);
+            handle_hook(notif, &state).await;
             Ok(())
         }
         Envelope::Bridge(_) => {
@@ -69,7 +68,7 @@ async fn handle_connection(stream: UnixStream, state: AppState) -> anyhow::Resul
                     Some(Envelope::Client(cmd)) => {
                         handle_client_command(cmd, &state).await;
                     }
-                    Some(Envelope::Hook(notif)) => log_dropped_hook(&notif),
+                    Some(Envelope::Hook(notif)) => handle_hook(notif, &state).await,
                     Some(Envelope::Bridge(_)) => {}
                     None => break,
                 }
@@ -87,11 +86,42 @@ async fn handle_connection(stream: UnixStream, state: AppState) -> anyhow::Resul
     }
 }
 
-fn log_dropped_hook(notif: &HookNotification) {
+async fn handle_hook(notif: HookNotification, state: &AppState) {
+    // Resolve session name: prefer the value the client sent, fall back to the
+    // server's pane→session cache, and only spawn a tmux subprocess as a last
+    // resort (rare — happens for a brand-new pane the poller hasn't seen yet).
+    let session_name = if !notif.session_name.is_empty() {
+        notif.session_name.clone()
+    } else if let Some(name) = state.session_for_pane(&notif.tmux_pane_id).await {
+        name
+    } else {
+        match tmux::pane_session_name(&notif.tmux_pane_id).await {
+            Ok(name) if !name.is_empty() => name,
+            _ => {
+                warn!(
+                    "hook: could not resolve session for pane {}",
+                    notif.tmux_pane_id
+                );
+                return;
+            }
+        }
+    };
+
     debug!(
-        "dropped hook: {:?} pane={}",
-        notif.event, notif.tmux_pane_id
+        "hook: {:?} session={} pane={}",
+        notif.event, session_name, notif.tmux_pane_id
     );
+    let changed = state
+        .handle_claude_event(
+            &session_name,
+            &notif.tmux_pane_id,
+            &notif.event,
+            notif.payload.as_deref(),
+        )
+        .await;
+    if changed {
+        state.broadcast().await;
+    }
 }
 
 async fn handle_client_command(cmd: ClientMessage, state: &AppState) {

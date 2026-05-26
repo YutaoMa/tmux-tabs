@@ -15,6 +15,24 @@ pub enum FrameError {
     Io(#[from] std::io::Error),
 }
 
+/// Serialize a message and prepend its `u32` length, producing the bytes that
+/// should be written to a socket as a single frame.
+///
+/// # Errors
+/// Returns [`FrameError::TooLarge`] if the encoded frame exceeds 1 MiB or
+/// [`FrameError::Deserialize`] if serialization fails.
+pub fn encode_frame<T: Serialize>(msg: &T) -> Result<Vec<u8>, FrameError> {
+    let data = serde_json::to_vec(msg)?;
+    let len = match u32::try_from(data.len()) {
+        Ok(n) if data.len() <= MAX_FRAME_BYTES => n,
+        _ => return Err(FrameError::TooLarge),
+    };
+    let mut buf = Vec::with_capacity(4 + data.len());
+    buf.extend_from_slice(&len.to_be_bytes());
+    buf.extend_from_slice(&data);
+    Ok(buf)
+}
+
 /// Write a length-prefixed JSON frame.
 ///
 /// # Errors
@@ -25,15 +43,7 @@ pub async fn write_frame<W: AsyncWriteExt + Unpin, T: Serialize>(
     writer: &mut W,
     msg: &T,
 ) -> Result<(), FrameError> {
-    let data = serde_json::to_vec(msg)?;
-    let len = match u32::try_from(data.len()) {
-        Ok(n) if data.len() <= MAX_FRAME_BYTES => n,
-        _ => return Err(FrameError::TooLarge),
-    };
-
-    let mut buf = Vec::with_capacity(4 + data.len());
-    buf.extend_from_slice(&len.to_be_bytes());
-    buf.extend_from_slice(&data);
+    let buf = encode_frame(msg)?;
     writer.write_all(&buf).await?;
     writer.flush().await?;
     Ok(())

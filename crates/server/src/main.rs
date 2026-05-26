@@ -1,3 +1,4 @@
+mod claude;
 mod git;
 mod socket;
 mod state;

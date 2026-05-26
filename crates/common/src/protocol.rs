@@ -41,6 +41,26 @@ pub enum ClaudeEvent {
     Notification,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("unknown ClaudeEvent: {0}")]
+pub struct ParseClaudeEventError(pub String);
+
+impl std::str::FromStr for ClaudeEvent {
+    type Err = ParseClaudeEventError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "session_start" => Ok(Self::SessionStart),
+            "prompt_submit" => Ok(Self::UserPromptSubmit),
+            "tool_use" => Ok(Self::ToolUse),
+            "stop" => Ok(Self::Stop),
+            "session_end" => Ok(Self::SessionEnd),
+            "notification" => Ok(Self::Notification),
+            other => Err(ParseClaudeEventError(other.to_string())),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TabGroupInfo {
     pub title: String,

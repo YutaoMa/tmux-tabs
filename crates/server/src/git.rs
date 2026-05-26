@@ -195,9 +195,17 @@ async fn get_branch(cwd: &str) -> Option<String> {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+enum GhState {
+    Open,
+    Merged,
+    Closed,
+}
+
+#[derive(serde::Deserialize)]
 struct GhPr {
     number: u32,
-    state: String,
+    state: GhState,
     #[serde(rename = "isDraft", default)]
     is_draft: bool,
 }
@@ -223,15 +231,11 @@ async fn get_pr_status(cwd: &str) -> Option<(u32, PrState)> {
     }
 
     let pr: GhPr = serde_json::from_slice(&result.stdout).ok()?;
-    let state = if pr.is_draft {
-        PrState::Draft
-    } else {
-        match pr.state.as_str() {
-            "OPEN" => PrState::Open,
-            "MERGED" => PrState::Merged,
-            "CLOSED" => PrState::Closed,
-            _ => return None,
-        }
+    let state = match (pr.state, pr.is_draft) {
+        (GhState::Open, true) => PrState::Draft,
+        (GhState::Open, false) => PrState::Open,
+        (GhState::Merged, _) => PrState::Merged,
+        (GhState::Closed, _) => PrState::Closed,
     };
     Some((pr.number, state))
 }
