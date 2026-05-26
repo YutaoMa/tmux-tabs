@@ -66,6 +66,25 @@ To show Claude Code status in the sidebar (processing / waiting indicators, curr
 
 The hook script runs `tmux-tabs notify` in the background so it adds essentially no latency to Claude Code's hot path.
 
+## Chrome integration (optional)
+
+For bidirectional Chrome tab-group ↔ tmux session sync (collapsing other groups when you switch tmux sessions, switching tmux when you expand a group, plus right-click "send selection to Claude Code" on any web page):
+
+1. Build the bridge binary (already built if you ran `cargo build --release` above):
+   ```sh
+   cargo build --release -p tmux-tabs-bridge
+   ```
+2. Load the extension in Chrome:
+   - Open `chrome://extensions`, enable **Developer mode**
+   - Click **Load unpacked**, select the `extension/` directory in this repo
+   - Copy the **extension ID** shown for the loaded extension
+3. Install the native-messaging host manifest:
+   ```sh
+   ./scripts/install-chrome-bridge.sh target/release/tmux-tabs-bridge
+   ```
+4. Edit the installed manifest (path printed by the script) and replace `EXTENSION_ID_PLACEHOLDER` with the extension ID from step 2.
+5. Reload the extension at `chrome://extensions`. The popup should show `N tab groups` once connected.
+
 ## Usage
 
 Mouse (works regardless of which pane has focus):

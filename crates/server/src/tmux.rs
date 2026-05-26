@@ -75,6 +75,12 @@ pub async fn kill_session(name: &str) -> anyhow::Result<()> {
     tmux_run(&["kill-session", "-t", name]).await
 }
 
+/// Send literal text to a tmux pane via `send-keys -l` (no implicit Enter,
+/// so the user can review and edit before submitting).
+pub async fn send_keys(pane_id: &str, text: &str) -> anyhow::Result<()> {
+    tmux_run(&["send-keys", "-t", pane_id, "-l", text]).await
+}
+
 /// Get all active panes mapped to their session name. One tmux call serves
 /// both dead-pane sweeps and the pane→session cache used by hook handlers.
 ///

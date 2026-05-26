@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {
+      width: 240px;
+      padding: 12px;
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      color: #e0e0e0;
+      background: #1e1e1e;
+    }
+    h3 { margin: 0 0 8px; font-size: 14px; }
+    .status { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot.on { background: #4caf50; }
+    .dot.off { background: #666; }
+    .groups { list-style: none; padding: 0; margin: 0; }
+    .groups li {
+      padding: 4px 0;
+      border-bottom: 1px solid #333;
+      display: flex;
+      justify-content: space-between;
+    }
+    .groups li:last-child { border-bottom: none; }
+    .count { color: #888; }
+  </style>
+</head>
+<body>
+  <h3>tmux-tabs</h3>
+  <div class="status">
+    <div class="dot" id="dot"></div>
+    <span id="status-text">Checking...</span>
+  </div>
+  <ul class="groups" id="groups"></ul>
+  <script src="popup.js"></script>
+</body>
+</html>
