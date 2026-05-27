@@ -13,6 +13,8 @@ path = "src/main.rs"
 [dependencies]
 tmux-tabs-common = { path = "../common" }
 anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "macros", "time", "process", "sync", "io-util"] }
 ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }

@@ -1,4 +1,5 @@
 mod app;
+mod capture;
 mod input;
 mod ui;
 
@@ -40,6 +41,9 @@ async fn async_main(args: Vec<String>) -> anyhow::Result<()> {
         Subcommand::Kill => cmd_kill(),
         Subcommand::Switch { index } => cmd_switch(index).await,
         Subcommand::Close { session } => cmd_close(session).await,
+        Subcommand::Capture { pane, probe, lines } => {
+            capture::cmd_capture(pane, probe, lines).await
+        }
         Subcommand::Tui => cmd_tui().await,
     }
 }
@@ -49,6 +53,7 @@ enum Subcommand {
     Kill,
     Switch { index: usize },
     Close { session: Option<String> },
+    Capture { pane: Option<String>, probe: bool, lines: u32 },
     Tui,
 }
 
@@ -74,6 +79,10 @@ impl TryFrom<&[String]> for Subcommand {
                 let session = parse_session_flag(&args[1..]);
                 Ok(Self::Close { session })
             }
+            Some("capture") => {
+                let (pane, probe, lines) = parse_capture_flags(&args[1..])?;
+                Ok(Self::Capture { pane, probe, lines })
+            }
             _ => Ok(Self::Tui),
         }
     }
@@ -88,6 +97,36 @@ fn parse_session_flag(args: &[String]) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn parse_capture_flags(args: &[String]) -> anyhow::Result<(Option<String>, bool, u32)> {
+    let mut pane = None;
+    let mut probe = false;
+    let mut lines = capture::DEFAULT_LINES;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--pane" => {
+                pane = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--probe" => {
+                probe = true;
+                i += 1;
+            }
+            "--lines" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--lines requires a value"))?;
+                lines = value
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("invalid --lines value: {value}"))?;
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    Ok((pane, probe, lines))
 }
 
 /// Connect to the server, register, and read the initial state snapshot.

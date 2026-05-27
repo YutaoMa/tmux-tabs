@@ -85,6 +85,16 @@ For bidirectional Chrome tab-group ↔ tmux session sync (collapsing other group
 4. Edit the installed manifest (path printed by the script) and replace `EXTENSION_ID_PLACEHOLDER` with the extension ID from step 2.
 5. Reload the extension at `chrome://extensions`. The popup should show `N tab groups` once connected.
 
+## `/grab` slash command (optional)
+
+Pulls text from a neighboring tmux pane into the current Claude Code conversation as context. To enable globally:
+
+```sh
+cp .claude/commands/grab.md ~/.claude/commands/
+```
+
+`/grab` then works in any Claude Code session inside tmux: if there's exactly one sibling pane in the current window, its content is captured automatically; if there are multiple, Claude prompts you to pick. The underlying binary is `tmux-tabs capture` (also accepts `--pane <id>`, `--probe`, `--lines <n>`).
+
 ## Usage
 
 Mouse (works regardless of which pane has focus):
