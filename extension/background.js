@@ -38,6 +38,8 @@ function connect() {
       handleSync(msg.sessions, msg.current_session);
     } else if (msg.type === "close_tab_group") {
       handleCloseTabGroup(msg.session_name);
+    } else if (msg.type === "open_tab_group") {
+      handleOpenTabGroup(msg.session_name);
     }
   });
 
@@ -116,6 +118,39 @@ async function handleCloseTabGroup(sessionName) {
       console.error("close_tab_group failed:", e);
     }
   });
+}
+
+// Re-create (or just expand) the tab group whose title matches `sessionName`,
+// clearing the user-deleted tombstone so future syncs keep it too. The group
+// is recreated expanded when it's the current session, collapsed otherwise.
+async function handleOpenTabGroup(sessionName) {
+  const key = (sessionName || "").toLowerCase();
+  if (!key) return;
+  deletedGroups.delete(key);
+  const isCurrent = key === lastCurrentSession.toLowerCase();
+  await withSwitchingGuard(async () => {
+    try {
+      const groups = await chrome.tabGroups.query({});
+      const existing = groups.find((g) => g.title && g.title.toLowerCase() === key);
+      if (existing) {
+        await chrome.tabGroups.update(existing.id, { collapsed: !isCurrent });
+        return;
+      }
+      // Preserve the tmux session's original casing for the group title.
+      const title = lastSessions.find((s) => s.toLowerCase() === key) || sessionName;
+      const tab = await chrome.tabs.create({ active: false });
+      const groupId = await chrome.tabs.group({ tabIds: [tab.id] });
+      await chrome.tabGroups.update(groupId, {
+        title,
+        collapsed: !isCurrent,
+        color: "grey",
+      });
+    } catch (e) {
+      console.error("open_tab_group failed:", e);
+    }
+  }, 200);
+  await sortManagedGroups(lastSessions);
+  reportState();
 }
 
 function arraysEqual(a, b) {

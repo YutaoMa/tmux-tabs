@@ -41,6 +41,7 @@ bind-key -T tabs_mode 7 run-shell "tmux-tabs switch 7"
 bind-key -T tabs_mode 8 run-shell "tmux-tabs switch 8"
 bind-key -T tabs_mode 9 run-shell "tmux-tabs switch 9"
 bind-key -T tabs_mode x display-popup -E "tmux-tabs close"
+bind-key -T tabs_mode o run-shell "tmux-tabs open-tabs --session '#S'"
 ```
 
 Reload tmux (`prefix + :source-file ~/.tmux.conf`) and start a new session — the sidebar should appear on the left.
@@ -106,6 +107,7 @@ From any pane (key tables):
 
 - **`prefix + g + 1..9`** → jump to the Nth session
 - **`prefix + g + x`** → close the current session (popup confirms)
+- **`prefix + g + o`** → reopen the current session's Chrome tab group (if you closed it manually)
 
 Inside the sidebar pane (when focused):
 

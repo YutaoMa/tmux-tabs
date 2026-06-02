@@ -56,6 +56,8 @@ enum ToExtension {
     },
     #[serde(rename = "close_tab_group")]
     CloseTabGroup { session_name: String },
+    #[serde(rename = "open_tab_group")]
+    OpenTabGroup { session_name: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,6 +154,9 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Some(BridgeCommand::CloseTabGroup { session_name }) => {
                         send_to_extension(ToExtension::CloseTabGroup { session_name }).await;
+                    }
+                    Some(BridgeCommand::OpenTabGroup { session_name }) => {
+                        send_to_extension(ToExtension::OpenTabGroup { session_name }).await;
                     }
                     None => {
                         info!("server disconnected");

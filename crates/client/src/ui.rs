@@ -17,7 +17,7 @@ const COLOR_PR_OPEN: Color = Color::Green;
 const COLOR_PR_DRAFT: Color = Color::DarkGray;
 const COLOR_PR_MERGED: Color = Color::Magenta;
 const COLOR_PR_CLOSED: Color = Color::Red;
-const COLOR_CURRENT_BORDER: Color = Color::Green;
+const COLOR_CURRENT: Color = Color::Green;
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_PERIOD_MS: u128 = 100;
@@ -71,10 +71,6 @@ fn render_sessions(frame: &mut Frame, app: &App, area: Rect) {
     let width = area.width as usize;
     let last_index = app.sessions.len().saturating_sub(1);
     let spinner = spinner_frame();
-    let current_idx = app
-        .sessions
-        .iter()
-        .position(|e| e.session.name == app.current_session);
 
     let mut items: Vec<ListItem> = Vec::with_capacity(app.sessions.len() * 2);
 
@@ -83,13 +79,7 @@ fn render_sessions(frame: &mut Frame, app: &App, area: Rect) {
         let is_selected = app.selected == Some(i);
         items.push(render_card(entry, i, is_current, is_selected, width, spinner));
         if i < last_index {
-            let touches_current = current_idx == Some(i) || current_idx == Some(i + 1);
-            let color = if touches_current {
-                COLOR_CURRENT_BORDER
-            } else {
-                TEXT_DIM
-            };
-            items.push(divider_item(width, color));
+            items.push(divider_item(width, TEXT_DIM));
         }
     }
 
@@ -112,7 +102,7 @@ fn render_card(
 ) -> ListItem<'static> {
     let mut name_style = Style::default();
     if is_current {
-        name_style = name_style.add_modifier(Modifier::BOLD).fg(Color::White);
+        name_style = name_style.add_modifier(Modifier::BOLD).fg(COLOR_CURRENT);
     }
     if is_selected {
         name_style = name_style.add_modifier(Modifier::REVERSED);

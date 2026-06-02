@@ -41,6 +41,7 @@ async fn async_main(args: Vec<String>) -> anyhow::Result<()> {
         Subcommand::Kill => cmd_kill(),
         Subcommand::Switch { index } => cmd_switch(index).await,
         Subcommand::Close { session } => cmd_close(session).await,
+        Subcommand::OpenTabs { session } => cmd_open_tabs(session).await,
         Subcommand::Capture { pane, probe, lines } => {
             capture::cmd_capture(pane, probe, lines).await
         }
@@ -53,6 +54,7 @@ enum Subcommand {
     Kill,
     Switch { index: usize },
     Close { session: Option<String> },
+    OpenTabs { session: Option<String> },
     Capture { pane: Option<String>, probe: bool, lines: u32 },
     Tui,
 }
@@ -78,6 +80,10 @@ impl TryFrom<&[String]> for Subcommand {
             Some("close") => {
                 let session = parse_session_flag(&args[1..]);
                 Ok(Self::Close { session })
+            }
+            Some("open-tabs") => {
+                let session = parse_session_flag(&args[1..]);
+                Ok(Self::OpenTabs { session })
             }
             Some("capture") => {
                 let (pane, probe, lines) = parse_capture_flags(&args[1..])?;
@@ -238,6 +244,28 @@ async fn cmd_close(session: Option<String>) -> anyhow::Result<()> {
     let _ = writer.shutdown().await;
     let mut sink = Vec::new();
     let _ = reader.read_to_end(&mut sink).await;
+    Ok(())
+}
+
+/// Re-open the Chrome tab group for the target session (the current session
+/// when `--session` is omitted). Best-effort and silent — typically bound to a
+/// tmux key — so a missing server or absent Chrome bridge is a no-op.
+async fn cmd_open_tabs(session: Option<String>) -> anyhow::Result<()> {
+    let Some(session_name) = resolve_target_session(session).await else {
+        eprintln!("could not resolve target session (not in tmux?)");
+        std::process::exit(2);
+    };
+
+    let Ok(mut stream) = UnixStream::connect(socket_path()).await else {
+        // Server not running — stay silent so a hotkey doesn't spew errors.
+        return Ok(());
+    };
+
+    // A lone command frame (no Register) is handled by the server's catch-all
+    // `Envelope::Client` arm. write_frame flushes, so the kernel has the bytes
+    // before the stream drops — same one-shot pattern as `notify`.
+    let msg = Envelope::Client(ClientMessage::OpenTabGroup { session_name });
+    let _ = write_frame(&mut stream, &msg).await;
     Ok(())
 }
 

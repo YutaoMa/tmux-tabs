@@ -9,6 +9,7 @@ pub enum ClientMessage {
     SwitchSession { session_name: String },
     RenameSession { old_name: String, new_name: String },
     CloseSession { session_name: String },
+    OpenTabGroup { session_name: String },
 }
 
 /// Server → Client
@@ -95,6 +96,9 @@ pub enum BridgeCommand {
     },
     /// Close the tab group that matches `session_name`.
     CloseTabGroup { session_name: String },
+    /// Re-create (or expand) the tab group that matches `session_name`,
+    /// clearing the extension's tombstone so a user-deleted group comes back.
+    OpenTabGroup { session_name: String },
 }
 
 /// Discriminates between client messages, hook notifications, and bridge messages
