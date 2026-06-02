@@ -111,6 +111,18 @@ impl AppState {
         );
     }
 
+    /// Best-effort: ask the bridge (if connected) to re-open the tab group
+    /// matching `session_name`. Drops the bridge if the channel is dead.
+    pub async fn open_tab_group(&self, session_name: &str) {
+        let mut state = self.state.write().await;
+        try_send_bridge(
+            &mut state,
+            BridgeCommand::OpenTabGroup {
+                session_name: session_name.to_string(),
+            },
+        );
+    }
+
     /// Update tab group state reported by the bridge. Returns true if the
     /// tracked state actually changed.
     pub async fn update_tab_groups(&self, groups: Vec<TabGroupInfo>) -> bool {

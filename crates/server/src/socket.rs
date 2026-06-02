@@ -233,6 +233,12 @@ async fn handle_client_command(cmd: ClientMessage, state: &AppState) {
             state.close_tab_group(&session_name).await;
             tmux::kill_session(&session_name).await
         }
+        ClientMessage::OpenTabGroup { session_name } => {
+            // Re-open the tab group only — no tmux change, so skip the
+            // list/broadcast below; the extension reports the recreated group.
+            state.open_tab_group(&session_name).await;
+            return;
+        }
     };
     if let Err(e) = result {
         warn!("command failed: {e}");
