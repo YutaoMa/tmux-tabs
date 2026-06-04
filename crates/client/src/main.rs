@@ -8,8 +8,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use tmux_tabs_common::{
-    ClaudeEvent, ClientMessage, Envelope, HookNotification, ServerMessage, SessionEntry,
-    read_frame, socket_path, write_frame,
+    AgentKind, ClientMessage, Envelope, HookNotification, ServerMessage, SessionEntry, read_frame,
+    socket_path, write_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -18,7 +18,7 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
-    // Hot path: Claude Code hook notifications fire frequently. Dispatch the
+    // Hot path: AI CLI hook notifications fire frequently. Dispatch the
     // sync path before building a tokio runtime so the hook returns ASAP.
     if args.get(1).map(String::as_str) == Some("notify") {
         cmd_notify_sync(&args[2..]);
@@ -308,17 +308,13 @@ fn current_pane_id() -> String {
     std::env::var("TMUX_PANE").unwrap_or_else(|_| "%0".to_string())
 }
 
-/// Send a one-shot Claude Code hook notification to the server. Sync so it
-/// skips the tokio runtime init — the hook script invokes this on every
-/// Claude Code event and needs to return immediately. Best-effort: any I/O
-/// failure is silently swallowed so the hook never blocks Claude Code. Set
-/// `TMUX_TABS_HOOK_DEBUG=1` to log failure points to stderr.
+/// Send a one-shot AI CLI hook notification to the server. Sync so it skips
+/// the tokio runtime init — hook scripts invoke this on every event and need
+/// to return immediately. Best-effort: any I/O failure is silently swallowed
+/// so the hook never blocks the calling AI CLI. Set `TMUX_TABS_HOOK_DEBUG=1`
+/// to log failure points to stderr.
 fn cmd_notify_sync(args: &[String]) {
-    let event_name = args.first().map_or("stop", String::as_str);
-    let event = event_name.parse::<ClaudeEvent>().unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let event = args.first().cloned().unwrap_or_else(|| "stop".to_string());
 
     let debug = std::env::var_os("TMUX_TABS_HOOK_DEBUG").is_some();
     let log = |msg: &str| {
@@ -327,10 +323,11 @@ fn cmd_notify_sync(args: &[String]) {
         }
     };
 
-    // Both flags are optional: the server resolves session name from pane_id
+    // All flags are optional: the server resolves session name from pane_id
     // via its cached pane map.
     let mut pane_id = String::new();
     let mut session_name = String::new();
+    let mut agent = AgentKind::Claude;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -340,6 +337,18 @@ fn cmd_notify_sync(args: &[String]) {
             }
             "--session" => {
                 session_name = args.get(i + 1).cloned().unwrap_or_default();
+                i += 2;
+            }
+            "--agent" => {
+                let value = args.get(i + 1).map_or("", String::as_str);
+                agent = match value {
+                    "copilot" => AgentKind::Copilot,
+                    "claude" | "" => AgentKind::Claude,
+                    other => {
+                        eprintln!("unknown agent: {other}");
+                        std::process::exit(1);
+                    }
+                };
                 i += 2;
             }
             _ => i += 1,
@@ -371,6 +380,7 @@ fn cmd_notify_sync(args: &[String]) {
     let notif = Envelope::Hook(HookNotification {
         tmux_pane_id: pane_id,
         session_name,
+        agent,
         event,
         payload,
     });

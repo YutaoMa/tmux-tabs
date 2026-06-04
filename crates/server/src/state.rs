@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tmux_tabs_common::{
-    BridgeCommand, ClaudeEvent, ServerMessage, SessionEntry, TabGroupInfo, TmuxSession,
+    AgentKind, BridgeCommand, ServerMessage, SessionEntry, TabGroupInfo, TmuxSession,
 };
 use tokio::sync::{Notify, RwLock, mpsc};
 
+use crate::agent::AgentTracker;
 use crate::browser::BrowserTracker;
-use crate::claude::ClaudeTracker;
 use crate::git::GitTracker;
 
 struct Client {
@@ -22,7 +22,7 @@ struct Client {
 struct State {
     sessions: Vec<TmuxSession>,
     git: GitTracker,
-    claude: ClaudeTracker,
+    agent: AgentTracker,
     browser: BrowserTracker,
     clients: HashMap<String, Client>,
     /// At most one bridge is connected at a time.
@@ -45,7 +45,7 @@ impl AppState {
             state: Arc::new(RwLock::new(State {
                 sessions: Vec::new(),
                 git: GitTracker::new(),
-                claude: ClaudeTracker::new(),
+                agent: AgentTracker::new(),
                 browser: BrowserTracker::new(),
                 clients: HashMap::new(),
                 bridge: None,
@@ -134,38 +134,40 @@ impl AppState {
         changed
     }
 
-    /// Get the Claude Code pane ID for the currently attached tmux session.
-    pub async fn active_claude_pane(&self) -> Option<String> {
+    /// Get the pane id for a specific agent in the currently attached tmux session.
+    pub async fn agent_pane(&self, kind: AgentKind) -> Option<String> {
         let state = self.state.read().await;
         let active = state.sessions.iter().find(|s| s.attached)?;
-        state.claude.pane_id(&active.name).map(String::from)
+        state.agent.agent_pane(&active.name, kind).map(String::from)
     }
 
-    /// Process a Claude Code hook event. Returns true if state changed.
-    pub async fn handle_claude_event(
+    /// Process a hook event for one of the supported AI CLIs. Returns true if
+    /// any visible state changed.
+    pub async fn handle_agent_event(
         &self,
         session_name: &str,
         pane_id: &str,
-        event: &ClaudeEvent,
+        kind: AgentKind,
+        event: &str,
         payload: Option<&str>,
     ) -> bool {
         let mut state = self.state.write().await;
         let changed = state
-            .claude
-            .handle_event(session_name, pane_id, event, payload);
+            .agent
+            .handle_event(session_name, pane_id, kind, event, payload);
         if changed {
             self.notify.notify_waiters();
         }
         changed
     }
 
-    /// Replace the pane→session map and prune Claude state for vanished panes.
+    /// Replace the pane→session map and prune agent state for vanished panes.
     /// Returns true if anything changed.
     pub async fn refresh_pane_map(&self, panes: HashMap<String, String>) -> bool {
         let mut state = self.state.write().await;
         let pane_map_changed = state.pane_sessions != panes;
-        let swept = state.claude.sweep_dead_panes(&panes);
-        let expired = state.claude.expire_stale();
+        let swept = state.agent.sweep_dead_panes(&panes);
+        let expired = state.agent.expire_stale();
         if pane_map_changed {
             state.pane_sessions = panes;
         }
@@ -207,9 +209,9 @@ impl AppState {
             .iter()
             .map(|s| SessionEntry {
                 session: s.clone(),
-                claude: state.claude.status(&s.name),
-                topic: state.claude.topic(&s.name).map(String::from),
-                context_pct: state.claude.context_pct(&s.name),
+                agent: state.agent.status(&s.name),
+                topic: state.agent.topic(&s.name).map(String::from),
+                context_pct: state.agent.context_pct(&s.name),
                 git: state.git.info(&s.name),
                 browser: state.browser.info(&s.name),
             })

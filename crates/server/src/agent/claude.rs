@@ -1,14 +1,57 @@
-use std::collections::HashMap;
+//! Claude Code agent: hook event types, payload schema, state transition,
+//! transcript-derived context-window calculation, and tool-description
+//! formatting. Pure per-event logic lives here; per-session state and
+//! cross-agent dispatch live in [`super`].
+
 use std::io::{Read, Seek, SeekFrom};
-use std::time::Instant;
 
-use tmux_tabs_common::{ClaudeEvent, ClaudeStatus};
+use tmux_tabs_common::AgentStatus;
 
-const TIMEOUT_SECS: u64 = 120;
+use super::SessionState;
+
 /// Token budget for Claude 1M-context models (Sonnet/Opus); Haiku and older
 /// models have smaller windows and will appear over 100% — capped below.
 const CONTEXT_WINDOW_TOKENS: u64 = 1_000_000;
 const TRANSCRIPT_TAIL_BYTES: u64 = 65_536;
+
+/// Hook event names emitted by Claude Code. Wire form is `snake_case` (what
+/// the `scripts/tmux-tabs-hook.sh` dispatcher passes on the CLI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaudeEvent {
+    SessionStart,
+    UserPromptSubmit,
+    ToolUse,
+    Stop,
+    SessionEnd,
+    Notification,
+}
+
+#[derive(Debug)]
+pub struct ParseClaudeEventError(pub String);
+
+impl std::fmt::Display for ParseClaudeEventError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown ClaudeEvent: {}", self.0)
+    }
+}
+
+impl std::error::Error for ParseClaudeEventError {}
+
+impl std::str::FromStr for ClaudeEvent {
+    type Err = ParseClaudeEventError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "session_start" => Ok(Self::SessionStart),
+            "prompt_submit" => Ok(Self::UserPromptSubmit),
+            "tool_use" => Ok(Self::ToolUse),
+            "stop" => Ok(Self::Stop),
+            "session_end" => Ok(Self::SessionEnd),
+            "notification" => Ok(Self::Notification),
+            other => Err(ParseClaudeEventError(other.to_string())),
+        }
+    }
+}
 
 #[derive(serde::Deserialize)]
 struct TranscriptLine {
@@ -37,17 +80,17 @@ struct TokenUsage {
 }
 
 #[derive(serde::Deserialize, Default)]
-struct HookPayload {
+pub struct ClaudePayload {
     #[serde(default)]
-    transcript_path: Option<String>,
+    pub transcript_path: Option<String>,
     #[serde(default)]
-    tool_name: Option<String>,
+    pub tool_name: Option<String>,
     #[serde(default)]
-    tool_input: Option<serde_json::Value>,
+    pub tool_input: Option<serde_json::Value>,
     #[serde(default)]
-    notification_type: Option<String>,
+    pub notification_type: Option<String>,
     #[serde(default)]
-    prompt: Option<String>,
+    pub prompt: Option<String>,
 }
 
 /// Read the last assistant entry from a Claude Code transcript JSONL file
@@ -116,9 +159,9 @@ fn format_tool_description(tool_name: &str, tool_input: Option<&serde_json::Valu
     short.unwrap_or_else(|| tool_name.to_string())
 }
 
-/// Pure state-machine transition: derive the new [`ClaudeStatus`] from the
+/// Pure state-machine transition: derive the new [`AgentStatus`] from the
 /// prior status, the incoming event, and the parsed payload.
-fn transition(prior: &ClaudeStatus, event: &ClaudeEvent, payload: &HookPayload) -> ClaudeStatus {
+fn transition(prior: &AgentStatus, event: ClaudeEvent, payload: &ClaudePayload) -> AgentStatus {
     let is_ask_user = matches!(event, ClaudeEvent::ToolUse)
         && payload.tool_name.as_deref() == Some("AskUserQuestion");
     let is_input_notification = matches!(event, ClaudeEvent::Notification)
@@ -128,7 +171,7 @@ fn transition(prior: &ClaudeStatus, event: &ClaudeEvent, payload: &HookPayload) 
         );
 
     match event {
-        ClaudeEvent::SessionStart | ClaudeEvent::Stop => ClaudeStatus::None,
+        ClaudeEvent::SessionStart | ClaudeEvent::Stop => AgentStatus::None,
         ClaudeEvent::ToolUse if is_ask_user => {
             let question = payload
                 .tool_input
@@ -137,155 +180,108 @@ fn transition(prior: &ClaudeStatus, event: &ClaudeEvent, payload: &HookPayload) 
                 .and_then(|v| v.get(0))
                 .and_then(|v| get_str(v, "question"))
                 .map(String::from);
-            ClaudeStatus::WaitingForInput { question }
+            AgentStatus::WaitingForInput { question }
         }
         ClaudeEvent::ToolUse => {
             let activity = payload
                 .tool_name
                 .as_deref()
                 .map(|tn| format_tool_description(tn, payload.tool_input.as_ref()));
-            ClaudeStatus::Processing { activity }
+            AgentStatus::Processing { activity }
         }
-        ClaudeEvent::UserPromptSubmit => ClaudeStatus::Processing { activity: None },
+        ClaudeEvent::UserPromptSubmit => AgentStatus::Processing { activity: None },
         ClaudeEvent::Notification if is_input_notification => {
             // Permission/elicitation prompt: promote the prior tool description
             // (set during the preceding PreToolUse) into the question slot.
             let question = match prior {
-                ClaudeStatus::Processing { activity } => activity.clone(),
+                AgentStatus::Processing { activity } => activity.clone(),
                 _ => None,
             };
-            ClaudeStatus::WaitingForInput { question }
+            AgentStatus::WaitingForInput { question }
         }
         ClaudeEvent::Notification => prior.clone(),
         ClaudeEvent::SessionEnd => unreachable!(),
     }
 }
 
-struct SessionState {
-    pane_id: String,
-    status: ClaudeStatus,
-    last_event: Instant,
-    topic: Option<String>,
-    transcript_path: Option<String>,
-    context_pct: Option<u8>,
+/// Returned by [`apply_event`] so the tracker knows whether the entry should
+/// be evicted entirely (`SessionEnd`).
+pub enum HandleOutcome {
+    /// State updated in place; tracker should keep the entry.
+    Updated,
+    /// Session ended; tracker should drop the entry.
+    Evict,
+    /// Event string didn't parse as a Claude event — caller may log/skip.
+    Unknown,
 }
 
-pub struct ClaudeTracker {
-    sessions: HashMap<String, SessionState>,
+/// Update `entry` for an incoming Claude hook event. Caller is responsible
+/// for timestamping (`last_event`) and pane-id refresh. Returns whether the
+/// tracker should keep or evict the entry.
+pub fn apply_event(
+    entry: &mut SessionState,
+    event_str: &str,
+    payload: Option<&str>,
+) -> HandleOutcome {
+    let Ok(event) = event_str.parse::<ClaudeEvent>() else {
+        return HandleOutcome::Unknown;
+    };
+
+    if matches!(event, ClaudeEvent::SessionEnd) {
+        return HandleOutcome::Evict;
+    }
+
+    let parsed: ClaudePayload = payload
+        .and_then(|p| serde_json::from_str(p).ok())
+        .unwrap_or_default();
+
+    if let Some(path) = &parsed.transcript_path {
+        entry.transcript_path = Some(path.clone());
+    }
+
+    entry.status = transition(&entry.status, event, &parsed);
+
+    match event {
+        ClaudeEvent::UserPromptSubmit => {
+            if let Some(prompt) = &parsed.prompt {
+                entry.topic = Some(prompt.clone());
+            }
+        }
+        ClaudeEvent::Stop => {
+            if let Some(path) = &entry.transcript_path {
+                entry.context_pct = read_context_pct(path);
+            }
+        }
+        _ => {}
+    }
+
+    HandleOutcome::Updated
 }
 
-impl ClaudeTracker {
-    pub fn new() -> Self {
-        Self {
-            sessions: HashMap::new(),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_all_documented_event_names() {
+        // Hook-script wire contract: scripts/tmux-tabs-hook.sh forwards these
+        // exact snake_case strings. They must keep parsing across refactors.
+        for (name, expected) in [
+            ("session_start", ClaudeEvent::SessionStart),
+            ("prompt_submit", ClaudeEvent::UserPromptSubmit),
+            ("tool_use", ClaudeEvent::ToolUse),
+            ("stop", ClaudeEvent::Stop),
+            ("session_end", ClaudeEvent::SessionEnd),
+            ("notification", ClaudeEvent::Notification),
+        ] {
+            let parsed = name.parse::<ClaudeEvent>().unwrap();
+            assert_eq!(parsed, expected, "event name `{name}` parsed incorrectly");
         }
     }
 
-    /// Process a Claude Code hook event for a session. Returns true if state changed.
-    pub fn handle_event(
-        &mut self,
-        session_name: &str,
-        pane_id: &str,
-        event: &ClaudeEvent,
-        payload: Option<&str>,
-    ) -> bool {
-        let now = Instant::now();
-
-        // SessionEnd removes the entry entirely.
-        if matches!(event, ClaudeEvent::SessionEnd) {
-            return self.sessions.remove(session_name).is_some();
-        }
-
-        let entry = self
-            .sessions
-            .entry(session_name.to_string())
-            .or_insert(SessionState {
-                pane_id: pane_id.to_string(),
-                status: ClaudeStatus::None,
-                last_event: now,
-                topic: None,
-                transcript_path: None,
-                context_pct: None,
-            });
-
-        let old_status = entry.status.clone();
-        let old_topic = entry.topic.clone();
-        let old_context_pct = entry.context_pct;
-        entry.last_event = now;
-        entry.pane_id = pane_id.to_string();
-
-        let parsed: HookPayload = payload
-            .and_then(|p| serde_json::from_str(p).ok())
-            .unwrap_or_default();
-
-        if let Some(path) = &parsed.transcript_path {
-            entry.transcript_path = Some(path.clone());
-        }
-
-        entry.status = transition(&entry.status, event, &parsed);
-
-        match event {
-            ClaudeEvent::UserPromptSubmit => {
-                if let Some(prompt) = &parsed.prompt {
-                    entry.topic = Some(prompt.clone());
-                }
-            }
-            ClaudeEvent::Stop => {
-                if let Some(path) = &entry.transcript_path {
-                    entry.context_pct = read_context_pct(path);
-                }
-            }
-            _ => {}
-        }
-
-        entry.status != old_status
-            || entry.topic != old_topic
-            || entry.context_pct != old_context_pct
-    }
-
-    pub fn status(&self, session_name: &str) -> ClaudeStatus {
-        self.sessions
-            .get(session_name)
-            .map_or(ClaudeStatus::None, |s| s.status.clone())
-    }
-
-    pub fn topic(&self, session_name: &str) -> Option<&str> {
-        self.sessions
-            .get(session_name)
-            .and_then(|s| s.topic.as_deref())
-    }
-
-    pub fn context_pct(&self, session_name: &str) -> Option<u8> {
-        self.sessions.get(session_name).and_then(|s| s.context_pct)
-    }
-
-    pub fn pane_id(&self, session_name: &str) -> Option<&str> {
-        self.sessions.get(session_name).map(|s| s.pane_id.as_str())
-    }
-
-    /// Remove sessions whose pane no longer exists. Returns true if state changed.
-    pub fn sweep_dead_panes(&mut self, live: &HashMap<String, String>) -> bool {
-        let before = self.sessions.len();
-        self.sessions
-            .retain(|_, state| live.contains_key(&state.pane_id));
-        self.sessions.len() != before
-    }
-
-    /// Revert stuck transient states (Processing/WaitingForInput) back to None
-    /// after no events for `TIMEOUT_SECS`. Returns true if state changed.
-    pub fn expire_stale(&mut self) -> bool {
-        let now = Instant::now();
-        let mut changed = false;
-        for state in self.sessions.values_mut() {
-            let is_transient = matches!(
-                state.status,
-                ClaudeStatus::Processing { .. } | ClaudeStatus::WaitingForInput { .. }
-            );
-            if is_transient && now.duration_since(state.last_event).as_secs() > TIMEOUT_SECS {
-                state.status = ClaudeStatus::None;
-                changed = true;
-            }
-        }
-        changed
+    #[test]
+    fn rejects_unknown_event_names() {
+        assert!("nope".parse::<ClaudeEvent>().is_err());
+        assert!("sessionStart".parse::<ClaudeEvent>().is_err());
     }
 }
