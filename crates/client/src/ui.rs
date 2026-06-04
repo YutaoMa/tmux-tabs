@@ -5,7 +5,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
-use tmux_tabs_common::{ClaudeStatus, PrState, SessionEntry};
+use tmux_tabs_common::{AgentStatus, PrState, SessionEntry};
 
 use crate::app::{App, Mode};
 
@@ -193,8 +193,8 @@ fn topic_line(entry: &SessionEntry, width: usize) -> Line<'static> {
 
 /// Status line priority: question (orange) > spinner+activity (processing) > blank.
 fn status_line(entry: &SessionEntry, width: usize, spinner: &'static str) -> Line<'static> {
-    match &entry.claude {
-        ClaudeStatus::WaitingForInput { question } => {
+    match &entry.agent {
+        AgentStatus::WaitingForInput { question } => {
             let Some(q) = question else {
                 return Line::from("");
             };
@@ -204,7 +204,7 @@ fn status_line(entry: &SessionEntry, width: usize, spinner: &'static str) -> Lin
                 Style::default().fg(COLOR_ATTENTION),
             )])
         }
-        ClaudeStatus::Processing { activity } => {
+        AgentStatus::Processing { activity } => {
             let activity = activity.as_deref().unwrap_or("");
             let text = summarize(activity, width.saturating_sub(2));
             let mut spans = vec![Span::styled(spinner, Style::default().fg(COLOR_SPINNER))];
@@ -216,7 +216,7 @@ fn status_line(entry: &SessionEntry, width: usize, spinner: &'static str) -> Lin
             }
             Line::from(spans)
         }
-        ClaudeStatus::None => Line::from(""),
+        AgentStatus::None => Line::from(""),
     }
 }
 

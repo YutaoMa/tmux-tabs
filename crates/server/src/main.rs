@@ -1,5 +1,5 @@
+mod agent;
 mod browser;
-mod claude;
 mod git;
 mod socket;
 mod state;

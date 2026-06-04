@@ -23,43 +23,28 @@ pub enum ServerMessage {
 }
 
 /// Hook notifications → Server (one-shot connections from `tmux-tabs notify`).
+///
+/// `event` is a free-form string so the server can dispatch agent-specific
+/// parsing (Claude uses `snake_case` names like `prompt_submit`; Copilot CLI
+/// uses `camelCase` names like `sessionStart`). `agent` discriminates which
+/// vocabulary to use; defaults to `Claude` for backward compatibility.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HookNotification {
     pub tmux_pane_id: String,
     pub session_name: String,
-    pub event: ClaudeEvent,
+    #[serde(default)]
+    pub agent: AgentKind,
+    pub event: String,
     #[serde(default)]
     pub payload: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ClaudeEvent {
-    SessionStart,
-    UserPromptSubmit,
-    ToolUse,
-    Stop,
-    SessionEnd,
-    Notification,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("unknown ClaudeEvent: {0}")]
-pub struct ParseClaudeEventError(pub String);
-
-impl std::str::FromStr for ClaudeEvent {
-    type Err = ParseClaudeEventError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "session_start" => Ok(Self::SessionStart),
-            "prompt_submit" => Ok(Self::UserPromptSubmit),
-            "tool_use" => Ok(Self::ToolUse),
-            "stop" => Ok(Self::Stop),
-            "session_end" => Ok(Self::SessionEnd),
-            "notification" => Ok(Self::Notification),
-            other => Err(ParseClaudeEventError(other.to_string())),
-        }
-    }
+/// Which AI CLI emitted a hook notification or owns a per-session state slot.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum AgentKind {
+    #[default]
+    Claude,
+    Copilot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -108,4 +93,47 @@ pub enum Envelope {
     Client(ClientMessage),
     Hook(HookNotification),
     Bridge(BridgeMessage),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hook_notification_defaults_to_claude_agent() {
+        let json = serde_json::json!({
+            "tmux_pane_id": "%1",
+            "session_name": "main",
+            "event": "prompt_submit"
+        });
+        let notif: HookNotification = serde_json::from_value(json).unwrap();
+        assert_eq!(notif.agent, AgentKind::Claude);
+        assert_eq!(notif.event, "prompt_submit");
+        assert!(notif.payload.is_none());
+    }
+
+    #[test]
+    fn hook_notification_preserves_explicit_agent() {
+        let json = serde_json::json!({
+            "tmux_pane_id": "%1",
+            "session_name": "main",
+            "agent": "Copilot",
+            "event": "sessionStart"
+        });
+        let notif: HookNotification = serde_json::from_value(json).unwrap();
+        assert_eq!(notif.agent, AgentKind::Copilot);
+        assert_eq!(notif.event, "sessionStart");
+    }
+
+    #[test]
+    fn agent_kind_serializes_as_pascal_case() {
+        assert_eq!(
+            serde_json::to_value(AgentKind::Claude).unwrap(),
+            serde_json::json!("Claude")
+        );
+        assert_eq!(
+            serde_json::to_value(AgentKind::Copilot).unwrap(),
+            serde_json::json!("Copilot")
+        );
+    }
 }

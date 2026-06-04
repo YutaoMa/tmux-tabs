@@ -1,10 +1,11 @@
 //! Server-side socket protocol. Handles `ClientMessage`, `Envelope::Hook`
-//! (Claude Code), and `Envelope::Bridge` (Chrome extension).
+//! (Claude Code / Copilot CLI), and `Envelope::Bridge` (Chrome extension).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tmux_tabs_common::{
-    BridgeMessage, ClientMessage, Envelope, HookNotification, read_frame, socket_dir, write_frame,
+    AgentKind, BridgeMessage, ClientMessage, Envelope, HookNotification, read_frame, socket_dir,
+    write_frame,
 };
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, info, warn};
@@ -156,13 +157,14 @@ async fn handle_hook(notif: HookNotification, state: &AppState) {
     };
 
     debug!(
-        "hook: {:?} session={} pane={}",
-        notif.event, session_name, notif.tmux_pane_id
+        "hook: agent={:?} event={} session={} pane={}",
+        notif.agent, notif.event, session_name, notif.tmux_pane_id
     );
     let changed = state
-        .handle_claude_event(
+        .handle_agent_event(
             &session_name,
             &notif.tmux_pane_id,
+            notif.agent,
             &notif.event,
             notif.payload.as_deref(),
         )
@@ -179,7 +181,7 @@ async fn handle_send_to_pane(
     title: &str,
 ) -> anyhow::Result<()> {
     let pane_id = state
-        .active_claude_pane()
+        .agent_pane(AgentKind::Claude)
         .await
         .ok_or_else(|| anyhow::anyhow!("no Claude Code pane found for the active session"))?;
 
