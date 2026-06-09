@@ -6,10 +6,13 @@
 //! which agent emitted the most-recent event in each session, driving the
 //! unified UI status line.
 //!
-//! Phase 1 only ever inserts `AgentKind::Claude` entries; Phase 2 will wire
-//! up Copilot via an `events.jsonl` tail task.
+//! Claude state is driven by per-event hook notifications. Copilot has no
+//! per-turn `Stop` hook, so we use one `sessionStart` hook for discovery
+//! then drive the rest of the state machine off the per-session
+//! `events.jsonl` tail task in [`copilot::tail_loop`].
 
 pub mod claude;
+pub mod copilot;
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -58,6 +61,11 @@ impl AgentTracker {
 
     /// Process a hook event for a given (session, agent). Returns true if any
     /// observable state changed (status / topic / `context_pct` / `last_active`).
+    ///
+    /// Only Claude events flow through this path; Copilot's `sessionStart`
+    /// hook is routed to [`crate::state::AppState::register_copilot_session`]
+    /// in `socket.rs` because the rest of Copilot state arrives via the
+    /// events-file tail task, not subsequent hooks.
     pub fn handle_event(
         &mut self,
         session_name: &str,
@@ -68,9 +76,51 @@ impl AgentTracker {
     ) -> bool {
         match kind {
             AgentKind::Claude => self.handle_claude_event(session_name, pane_id, event_str, payload),
-            // Phase 2 will dispatch to a copilot handler here.
+            // Copilot never reaches this code path from a hook (see doc
+            // comment); kept as a defensive no-op.
             AgentKind::Copilot => false,
         }
+    }
+
+    /// Process a parsed Copilot event coming from the events.jsonl tail
+    /// task. Returns `(state_changed, outcome)`; the caller acts on
+    /// `Shutdown` by evicting the session and aborting the tail task.
+    pub fn handle_copilot_event(
+        &mut self,
+        session_name: &str,
+        pane_id: &str,
+        event: &copilot::CopilotEvent,
+    ) -> (bool, copilot::HandleOutcome) {
+        let now = Instant::now();
+        let key = (session_name.to_string(), AgentKind::Copilot);
+
+        if matches!(event, copilot::CopilotEvent::SessionShutdown) {
+            let removed = self.sessions.remove(&key).is_some();
+            let cleared_active = self.refresh_last_active(session_name);
+            return (removed || cleared_active, copilot::HandleOutcome::Shutdown);
+        }
+
+        let entry = self
+            .sessions
+            .entry(key)
+            .or_insert_with(|| SessionState::new(pane_id, now));
+
+        let old_status = entry.status.clone();
+        let old_topic = entry.topic.clone();
+        entry.last_event = now;
+        entry.pane_id = pane_id.to_string();
+
+        let outcome = copilot::apply_event(entry, event);
+
+        let state_changed = entry.status != old_status || entry.topic != old_topic;
+
+        let active_changed = matches!(outcome, copilot::HandleOutcome::Updated)
+            && self
+                .last_active
+                .insert(session_name.to_string(), AgentKind::Copilot)
+                != Some(AgentKind::Copilot);
+
+        (state_changed || active_changed, outcome)
     }
 
     fn handle_claude_event(
@@ -295,5 +345,91 @@ mod tests {
         assert!(changed);
         assert!(!tracker.last_active.contains_key("alpha"));
         assert!(matches!(tracker.status("alpha"), AgentStatus::None));
+    }
+
+    #[test]
+    fn handle_copilot_event_user_message_creates_processing_entry() {
+        let mut tracker = AgentTracker::new();
+        let event = copilot::CopilotEvent::UserMessage {
+            content: "do the thing".into(),
+        };
+
+        let (changed, outcome) = tracker.handle_copilot_event("main", "%5", &event);
+
+        assert!(changed);
+        assert!(matches!(outcome, copilot::HandleOutcome::Updated));
+        assert_eq!(tracker.last_active.get("main"), Some(&AgentKind::Copilot));
+        assert!(matches!(
+            tracker.status("main"),
+            AgentStatus::Processing { activity: None }
+        ));
+        assert_eq!(tracker.topic("main"), Some("do the thing"));
+        assert_eq!(tracker.agent_pane("main", AgentKind::Copilot), Some("%5"));
+    }
+
+    #[test]
+    fn handle_copilot_event_shutdown_evicts_entry_and_clears_last_active() {
+        let mut tracker = AgentTracker::new();
+        seed(
+            &mut tracker,
+            "main",
+            AgentKind::Copilot,
+            "%5",
+            AgentStatus::Processing { activity: None },
+        );
+
+        let (changed, outcome) =
+            tracker.handle_copilot_event("main", "%5", &copilot::CopilotEvent::SessionShutdown);
+
+        assert!(changed);
+        assert!(matches!(outcome, copilot::HandleOutcome::Shutdown));
+        assert!(tracker.agent_pane("main", AgentKind::Copilot).is_none());
+        assert!(!tracker.last_active.contains_key("main"));
+    }
+
+    #[test]
+    fn last_active_alternates_between_claude_and_copilot_in_same_session() {
+        let mut tracker = AgentTracker::new();
+        seed(
+            &mut tracker,
+            "main",
+            AgentKind::Claude,
+            "%1",
+            AgentStatus::Processing {
+                activity: Some("claude-thinking".into()),
+            },
+        );
+        assert_eq!(tracker.last_active.get("main"), Some(&AgentKind::Claude));
+
+        let (changed, _) = tracker.handle_copilot_event(
+            "main",
+            "%2",
+            &copilot::CopilotEvent::UserMessage {
+                content: "copilot prompt".into(),
+            },
+        );
+        assert!(changed);
+        assert_eq!(tracker.last_active.get("main"), Some(&AgentKind::Copilot));
+
+        assert_eq!(tracker.agent_pane("main", AgentKind::Claude), Some("%1"));
+        assert_eq!(tracker.agent_pane("main", AgentKind::Copilot), Some("%2"));
+
+        let (changed, _) = tracker.handle_copilot_event(
+            "main",
+            "%2",
+            &copilot::CopilotEvent::AssistantTurnEnd,
+        );
+        assert!(changed);
+        assert_eq!(tracker.last_active.get("main"), Some(&AgentKind::Copilot));
+        assert!(matches!(tracker.status("main"), AgentStatus::None));
+    }
+
+    #[test]
+    fn handle_copilot_event_other_returns_ignored() {
+        let mut tracker = AgentTracker::new();
+        let (changed, outcome) =
+            tracker.handle_copilot_event("main", "%1", &copilot::CopilotEvent::Other);
+        assert!(!changed);
+        assert!(matches!(outcome, copilot::HandleOutcome::Ignored));
     }
 }

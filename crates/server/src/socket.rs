@@ -160,6 +160,19 @@ async fn handle_hook(notif: HookNotification, state: &AppState) {
         "hook: agent={:?} event={} session={} pane={}",
         notif.agent, notif.event, session_name, notif.tmux_pane_id
     );
+
+    if notif.agent == AgentKind::Copilot && notif.event == "sessionStart" {
+        match notif.copilot_session_id {
+            Some(sid) if !sid.is_empty() => {
+                state
+                    .register_copilot_session(session_name, notif.tmux_pane_id, sid)
+                    .await;
+            }
+            _ => warn!("copilot sessionStart hook missing copilot_session_id"),
+        }
+        return;
+    }
+
     let changed = state
         .handle_agent_event(
             &session_name,

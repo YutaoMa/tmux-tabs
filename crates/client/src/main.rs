@@ -328,6 +328,7 @@ fn cmd_notify_sync(args: &[String]) {
     let mut pane_id = String::new();
     let mut session_name = String::new();
     let mut agent = AgentKind::Claude;
+    let mut copilot_session_id: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -349,6 +350,10 @@ fn cmd_notify_sync(args: &[String]) {
                         std::process::exit(1);
                     }
                 };
+                i += 2;
+            }
+            "--copilot-session-id" => {
+                copilot_session_id = args.get(i + 1).cloned().filter(|v| !v.is_empty());
                 i += 2;
             }
             _ => i += 1,
@@ -383,6 +388,7 @@ fn cmd_notify_sync(args: &[String]) {
         agent,
         event,
         payload,
+        copilot_session_id,
     });
 
     let Ok(buf) = tmux_tabs_common::encode_frame(&notif) else {

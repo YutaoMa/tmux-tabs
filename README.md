@@ -1,6 +1,6 @@
 # tmux-tabs
 
-Sidebar for managing tmux sessions — with first-class Claude Code integration, plus git and Chrome.
+Sidebar for managing tmux sessions — with first-class Claude Code and GitHub Copilot CLI integration, plus git and Chrome.
 
 ## Requirements
 
@@ -66,6 +66,25 @@ To show Claude Code status in the sidebar (processing / waiting indicators, curr
 ```
 
 The hook script runs `tmux-tabs notify` in the background so it adds essentially no latency to Claude Code's hot path.
+
+## GitHub Copilot CLI integration (optional)
+
+To show Copilot CLI status alongside Claude (same Processing / Waiting / topic display), register one `sessionStart` hook in `~/.copilot/settings.json` and the server will discover everything else from the per-session `events.jsonl` log. Replace `/path/to/tmux-tabs` with your repo clone path:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{
+      "type": "command",
+      "command": "bash /path/to/tmux-tabs/scripts/tmux-tabs-copilot-hook.sh",
+      "timeoutSec": 5
+    }]
+  }
+}
+```
+
+The hook fires once per Copilot session; the server then tails `~/.copilot/session-state/<sessionId>/events.jsonl` for turn boundaries, tool invocations, and permission prompts. Claude and Copilot panes in the same tmux session each get their own state slot and the sidebar shows whichever AI most recently emitted an event.
 
 ## Chrome integration (optional)
 
