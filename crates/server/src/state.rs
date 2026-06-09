@@ -5,8 +5,9 @@ use tmux_tabs_common::{
     AgentKind, BridgeCommand, ServerMessage, SessionEntry, TabGroupInfo, TmuxSession,
 };
 use tokio::sync::{Notify, RwLock, mpsc};
+use tokio::task::JoinHandle;
 
-use crate::agent::AgentTracker;
+use crate::agent::{AgentTracker, copilot};
 use crate::browser::BrowserTracker;
 use crate::git::GitTracker;
 
@@ -31,6 +32,12 @@ struct State {
     /// server resolve panes (e.g. on client register or hook event) without
     /// spawning a tmux subprocess on the hot path.
     pane_sessions: HashMap<String, String>,
+    /// Per-Copilot-session tail-task handles, keyed by the Copilot CLI's
+    /// own `sessionId`. Value carries the owning tmux pane so we can abort
+    /// stale tasks when a pane dies. Aborting a finished task is a no-op,
+    /// so the tail task itself calls back into `unregister_copilot_session`
+    /// on a `session.shutdown` event to free the slot.
+    copilot_tasks: HashMap<String, (String, JoinHandle<()>)>,
 }
 
 #[derive(Clone)]
@@ -50,6 +57,7 @@ impl AppState {
                 clients: HashMap::new(),
                 bridge: None,
                 pane_sessions: HashMap::new(),
+                copilot_tasks: HashMap::new(),
             })),
             notify: Arc::new(Notify::new()),
         }
@@ -161,17 +169,100 @@ impl AppState {
         changed
     }
 
+    /// Spawn a tail task for a freshly-started Copilot CLI session. Idempotent
+    /// per `copilot_session_id` — a duplicate hook (e.g. on `copilot --resume`)
+    /// is ignored so we don't double-dispatch events from the same file.
+    pub async fn register_copilot_session(
+        &self,
+        session_name: String,
+        pane_id: String,
+        copilot_session_id: String,
+    ) {
+        {
+            let state = self.state.read().await;
+            if state.copilot_tasks.contains_key(&copilot_session_id) {
+                return;
+            }
+        }
+        let handle = tokio::spawn(copilot::tail_loop(
+            self.clone(),
+            session_name,
+            pane_id.clone(),
+            copilot_session_id.clone(),
+        ));
+        let mut state = self.state.write().await;
+        // Re-check after re-acquiring the lock to close the TOCTOU window;
+        // if a concurrent register won, abort the new handle instead.
+        if state.copilot_tasks.contains_key(&copilot_session_id) {
+            handle.abort();
+            return;
+        }
+        state
+            .copilot_tasks
+            .insert(copilot_session_id, (pane_id, handle));
+        self.notify.notify_waiters();
+    }
+
+    /// Drop a Copilot tail task from the registry. Called from the tail loop
+    /// itself on `session.shutdown` (where `abort` is a no-op since the task
+    /// is about to return) and from sweep paths when the owning pane dies.
+    pub async fn unregister_copilot_session(&self, copilot_session_id: &str) {
+        let mut state = self.state.write().await;
+        if let Some((_, handle)) = state.copilot_tasks.remove(copilot_session_id) {
+            handle.abort();
+        }
+    }
+
+    /// Apply a parsed Copilot event to the tracker and broadcast if anything
+    /// changed. Called by the per-session tail task for each new line in
+    /// `events.jsonl`.
+    pub async fn dispatch_copilot_event(
+        &self,
+        session_name: &str,
+        pane_id: &str,
+        event: copilot::CopilotEvent,
+    ) {
+        let changed = {
+            let mut state = self.state.write().await;
+            let (changed, _outcome) =
+                state
+                    .agent
+                    .handle_copilot_event(session_name, pane_id, &event);
+            if changed {
+                self.notify.notify_waiters();
+            }
+            changed
+        };
+        if changed {
+            self.broadcast().await;
+        }
+    }
+
     /// Replace the pane→session map and prune agent state for vanished panes.
     /// Returns true if anything changed.
     pub async fn refresh_pane_map(&self, panes: HashMap<String, String>) -> bool {
         let mut state = self.state.write().await;
         let pane_map_changed = state.pane_sessions != panes;
+
+        let dead_copilot: Vec<String> = state
+            .copilot_tasks
+            .iter()
+            .filter(|(_, (pane, _))| !panes.contains_key(pane))
+            .map(|(sid, _)| sid.clone())
+            .collect();
+        let copilot_killed = !dead_copilot.is_empty();
+        for sid in dead_copilot {
+            if let Some((_, handle)) = state.copilot_tasks.remove(&sid) {
+                handle.abort();
+            }
+        }
+
         let swept = state.agent.sweep_dead_panes(&panes);
         let expired = state.agent.expire_stale();
         if pane_map_changed {
             state.pane_sessions = panes;
         }
-        pane_map_changed || swept || expired
+        pane_map_changed || swept || expired || copilot_killed
     }
 
     pub async fn session_for_pane(&self, pane_id: &str) -> Option<String> {

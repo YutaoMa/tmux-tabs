@@ -37,6 +37,8 @@ pub struct HookNotification {
     pub event: String,
     #[serde(default)]
     pub payload: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copilot_session_id: Option<String>,
 }
 
 /// Which AI CLI emitted a hook notification or owns a per-session state slot.
@@ -110,6 +112,7 @@ mod tests {
         assert_eq!(notif.agent, AgentKind::Claude);
         assert_eq!(notif.event, "prompt_submit");
         assert!(notif.payload.is_none());
+        assert!(notif.copilot_session_id.is_none());
     }
 
     #[test]
@@ -118,11 +121,32 @@ mod tests {
             "tmux_pane_id": "%1",
             "session_name": "main",
             "agent": "Copilot",
-            "event": "sessionStart"
+            "event": "sessionStart",
+            "copilot_session_id": "abc-123"
         });
         let notif: HookNotification = serde_json::from_value(json).unwrap();
         assert_eq!(notif.agent, AgentKind::Copilot);
         assert_eq!(notif.event, "sessionStart");
+        assert_eq!(notif.copilot_session_id.as_deref(), Some("abc-123"));
+    }
+
+    #[test]
+    fn hook_notification_omits_copilot_session_id_when_absent() {
+        // skip_serializing_if guard: don't bloat Claude hook payloads with a
+        // null `copilot_session_id` field.
+        let notif = HookNotification {
+            tmux_pane_id: "%1".to_string(),
+            session_name: "main".to_string(),
+            agent: AgentKind::Claude,
+            event: "prompt_submit".to_string(),
+            payload: None,
+            copilot_session_id: None,
+        };
+        let json = serde_json::to_value(&notif).unwrap();
+        assert!(
+            json.get("copilot_session_id").is_none(),
+            "field must not be serialized when None"
+        );
     }
 
     #[test]
