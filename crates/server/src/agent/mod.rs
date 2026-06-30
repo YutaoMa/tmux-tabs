@@ -193,12 +193,30 @@ impl AgentTracker {
             .and_then(|s| s.context_pct)
     }
 
-    /// Pane id for a specific agent in `session_name`. Used by the Chrome
-    /// "Send selection" routing, which always targets a specific AI.
+    /// Pane id for a specific agent in `session_name`. Currently only used
+    /// by tests to assert that per-agent entries are tracked independently;
+    /// production routing uses [`Self::active_agent_pane`] instead.
+    #[cfg(test)]
     pub fn agent_pane(&self, session_name: &str, kind: AgentKind) -> Option<&str> {
         self.sessions
             .get(&(session_name.to_string(), kind))
             .map(|s| s.pane_id.as_str())
+    }
+
+    /// Pane id of the most-recently-active agent in `session_name`, together
+    /// with which agent it is. Falls back to any registered agent in the
+    /// session if `last_active` isn't set yet (e.g. the session was just
+    /// registered but no events have flowed). Returns `None` if no agent is
+    /// known in this tmux session.
+    pub fn active_agent_pane(&self, session_name: &str) -> Option<(AgentKind, &str)> {
+        let kind = self.last_active.get(session_name).copied().or_else(|| {
+            [AgentKind::Claude, AgentKind::Copilot]
+                .into_iter()
+                .find(|k| self.sessions.contains_key(&(session_name.to_string(), *k)))
+        })?;
+        self.sessions
+            .get(&(session_name.to_string(), kind))
+            .map(|s| (kind, s.pane_id.as_str()))
     }
 
     /// Drop entries whose pane no longer exists. Returns true if state changed.
@@ -431,5 +449,58 @@ mod tests {
             tracker.handle_copilot_event("main", "%1", &copilot::CopilotEvent::Other);
         assert!(!changed);
         assert!(matches!(outcome, copilot::HandleOutcome::Ignored));
+    }
+
+    #[test]
+    fn active_agent_pane_returns_most_recently_active() {
+        let mut tracker = AgentTracker::new();
+        seed(
+            &mut tracker,
+            "main",
+            AgentKind::Claude,
+            "%1",
+            AgentStatus::Processing { activity: None },
+        );
+        seed(
+            &mut tracker,
+            "main",
+            AgentKind::Copilot,
+            "%2",
+            AgentStatus::Processing { activity: None },
+        );
+        // seed() updates last_active to Copilot (set after Claude).
+        assert_eq!(
+            tracker.active_agent_pane("main"),
+            Some((AgentKind::Copilot, "%2"))
+        );
+    }
+
+    #[test]
+    fn active_agent_pane_falls_back_when_last_active_unset() {
+        // Mimic the post-sessionStart, pre-first-event window where a Copilot
+        // session is registered but `last_active` hasn't been populated yet.
+        let mut tracker = AgentTracker::new();
+        tracker.sessions.insert(
+            ("main".to_string(), AgentKind::Copilot),
+            SessionState {
+                pane_id: "%7".into(),
+                status: AgentStatus::None,
+                last_event: Instant::now(),
+                topic: None,
+                transcript_path: None,
+                context_pct: None,
+            },
+        );
+
+        assert_eq!(
+            tracker.active_agent_pane("main"),
+            Some((AgentKind::Copilot, "%7"))
+        );
+    }
+
+    #[test]
+    fn active_agent_pane_returns_none_when_no_agent_registered() {
+        let tracker = AgentTracker::new();
+        assert_eq!(tracker.active_agent_pane("ghost"), None);
     }
 }

@@ -193,10 +193,9 @@ async fn handle_send_to_pane(
     url: &str,
     title: &str,
 ) -> anyhow::Result<()> {
-    let pane_id = state
-        .agent_pane(AgentKind::Claude)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no Claude Code pane found for the active session"))?;
+    let (kind, pane_id) = state.active_agent_pane().await.ok_or_else(|| {
+        anyhow::anyhow!("no AI pane (Claude Code or Copilot CLI) found for the active session")
+    })?;
 
     let source = if !title.is_empty() && !url.is_empty() {
         format!("{title}\n{url}")
@@ -230,7 +229,11 @@ async fn handle_send_to_pane(
         format!("Read {path_str} for context from the browser and use it for your current task")
     };
 
-    info!("send-to-pane: {} chars to {pane_id}", text.len());
+    info!(
+        "send-to-pane: {} chars to {pane_id} (agent={:?})",
+        text.len(),
+        kind
+    );
     tmux::send_keys(&pane_id, &prompt).await?;
     Ok(())
 }
