@@ -142,11 +142,17 @@ impl AppState {
         changed
     }
 
-    /// Get the pane id for a specific agent in the currently attached tmux session.
-    pub async fn agent_pane(&self, kind: AgentKind) -> Option<String> {
+    /// Pane id (with agent kind) of the most-recently-active AI in the
+    /// currently attached tmux session. Used by the Chrome "Send selection"
+    /// path so the message lands on whichever agent the user is actually
+    /// using — Claude or Copilot.
+    pub async fn active_agent_pane(&self) -> Option<(AgentKind, String)> {
         let state = self.state.read().await;
         let active = state.sessions.iter().find(|s| s.attached)?;
-        state.agent.agent_pane(&active.name, kind).map(String::from)
+        state
+            .agent
+            .active_agent_pane(&active.name)
+            .map(|(k, p)| (k, p.to_string()))
     }
 
     /// Process a hook event for one of the supported AI CLIs. Returns true if

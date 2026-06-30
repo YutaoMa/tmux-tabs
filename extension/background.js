@@ -55,12 +55,12 @@ connect();
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "send-selection",
-    title: "Send selection to Claude Code",
+    title: "Send selection to AI",
     contexts: ["selection"],
   });
   chrome.contextMenus.create({
     id: "send-page",
-    title: "Send page to Claude Code",
+    title: "Send page to AI",
     contexts: ["page"],
   });
 });
@@ -69,7 +69,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "send-selection") {
     if (info.selectionText && port) {
       port.postMessage({
-        type: "send_to_claude",
+        type: "send_to_pane",
         text: info.selectionText,
         url: tab?.url || "",
         title: tab?.title || "",
@@ -87,7 +87,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const text = results?.[0]?.result;
       if (text) {
         port.postMessage({
-          type: "send_to_claude",
+          type: "send_to_pane",
           text,
           url: tab.url || "",
           title: tab.title || "",

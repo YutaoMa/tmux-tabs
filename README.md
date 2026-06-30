@@ -88,7 +88,7 @@ The hook fires once per Copilot session; the server then tails `~/.copilot/sessi
 
 ## Chrome integration (optional)
 
-For bidirectional Chrome tab-group ↔ tmux session sync (collapsing other groups when you switch tmux sessions, switching tmux when you expand a group, plus right-click "send selection to Claude Code" on any web page):
+For bidirectional Chrome tab-group ↔ tmux session sync (collapsing other groups when you switch tmux sessions, switching tmux when you expand a group, plus right-click "send selection to AI" on any web page):
 
 1. Build the bridge binary (already built if you ran `cargo build --release` above):
    ```sh

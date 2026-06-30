@@ -67,8 +67,8 @@ enum FromExtension {
     State { groups: Vec<ExtensionTabGroup> },
     #[serde(rename = "switch_session")]
     SwitchSession { session: String },
-    #[serde(rename = "send_to_claude")]
-    SendToClaude {
+    #[serde(rename = "send_to_pane")]
+    SendToPane {
         text: String,
         #[serde(default)]
         url: String,
@@ -134,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
                         session_name: session,
                     })
                 }
-                Ok(FromExtension::SendToClaude { text, url, title }) => {
+                Ok(FromExtension::SendToPane { text, url, title }) => {
                     Envelope::Bridge(BridgeMessage::SendToPane { text, url, title })
                 }
                 Err(_) => continue,
