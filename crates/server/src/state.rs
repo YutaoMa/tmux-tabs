@@ -332,7 +332,8 @@ impl AppState {
                 .find(|s| s.attached)
                 .map(|s| s.name.clone())
                 .unwrap_or_default();
-            let session_names: Vec<String> = entries.iter().map(|e| e.session.name.clone()).collect();
+            let session_names: Vec<String> =
+                entries.iter().map(|e| e.session.name.clone()).collect();
             BridgeCommand::SyncState {
                 sessions: session_names,
                 current_session: active_session,

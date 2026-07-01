@@ -75,7 +75,9 @@ impl AgentTracker {
         payload: Option<&str>,
     ) -> bool {
         match kind {
-            AgentKind::Claude => self.handle_claude_event(session_name, pane_id, event_str, payload),
+            AgentKind::Claude => {
+                self.handle_claude_event(session_name, pane_id, event_str, payload)
+            }
             // Copilot never reaches this code path from a hook (see doc
             // comment); kept as a defensive no-op.
             AgentKind::Copilot => false,
@@ -134,10 +136,10 @@ impl AgentTracker {
         let key = (session_name.to_string(), AgentKind::Claude);
 
         // Peek before we mutate to detect SessionEnd-style evictions vs updates.
-        let outcome_is_evict =
-            event_str.parse::<claude::ClaudeEvent>().ok().is_some_and(|e| {
-                matches!(e, claude::ClaudeEvent::SessionEnd)
-            });
+        let outcome_is_evict = event_str
+            .parse::<claude::ClaudeEvent>()
+            .ok()
+            .is_some_and(|e| matches!(e, claude::ClaudeEvent::SessionEnd));
 
         if outcome_is_evict {
             let removed = self.sessions.remove(&key).is_some();
@@ -163,7 +165,9 @@ impl AgentTracker {
             || entry.context_pct != old_context_pct;
 
         let active_changed = matches!(outcome, claude::HandleOutcome::Updated)
-            && self.last_active.insert(session_name.to_string(), AgentKind::Claude)
+            && self
+                .last_active
+                .insert(session_name.to_string(), AgentKind::Claude)
                 != Some(AgentKind::Claude);
 
         state_changed || active_changed
@@ -432,11 +436,8 @@ mod tests {
         assert_eq!(tracker.agent_pane("main", AgentKind::Claude), Some("%1"));
         assert_eq!(tracker.agent_pane("main", AgentKind::Copilot), Some("%2"));
 
-        let (changed, _) = tracker.handle_copilot_event(
-            "main",
-            "%2",
-            &copilot::CopilotEvent::AssistantTurnEnd,
-        );
+        let (changed, _) =
+            tracker.handle_copilot_event("main", "%2", &copilot::CopilotEvent::AssistantTurnEnd);
         assert!(changed);
         assert_eq!(tracker.last_active.get("main"), Some(&AgentKind::Copilot));
         assert!(matches!(tracker.status("main"), AgentStatus::None));

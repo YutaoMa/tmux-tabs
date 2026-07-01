@@ -338,7 +338,8 @@ mod tests {
 
     #[test]
     fn parses_user_message() {
-        let line = r#"{"type":"user.message","data":{"content":"hello world","transformedContent":"x"}}"#;
+        let line =
+            r#"{"type":"user.message","data":{"content":"hello world","transformedContent":"x"}}"#;
         let event = parse_line(line).unwrap();
         assert_eq!(
             event,

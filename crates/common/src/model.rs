@@ -115,7 +115,10 @@ mod tests {
             browser: None,
         };
         let json = serde_json::to_value(&entry).unwrap();
-        assert!(json.get("claude").is_some(), "wire key must remain `claude`");
+        assert!(
+            json.get("claude").is_some(),
+            "wire key must remain `claude`"
+        );
         assert!(json.get("agent").is_none(), "must not emit new `agent` key");
     }
 }

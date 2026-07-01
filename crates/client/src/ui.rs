@@ -32,11 +32,7 @@ const PR_LABEL_WIDTH: usize = 6;
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    let chunks = Layout::vertical([
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .split(area);
+    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
 
     render_sessions(frame, app, chunks[0]);
     render_footer(frame, app, chunks[1]);
@@ -77,7 +73,14 @@ fn render_sessions(frame: &mut Frame, app: &App, area: Rect) {
     for (i, entry) in app.sessions.iter().enumerate() {
         let is_current = entry.session.name == app.current_session;
         let is_selected = app.selected == Some(i);
-        items.push(render_card(entry, i, is_current, is_selected, width, spinner));
+        items.push(render_card(
+            entry,
+            i,
+            is_current,
+            is_selected,
+            width,
+            spinner,
+        ));
         if i < last_index {
             items.push(divider_item(width, TEXT_DIM));
         }
@@ -155,7 +158,10 @@ fn git_line(entry: &SessionEntry, width: usize) -> Option<Line<'static>> {
             .map_or(0, |n| format!(" #{n} ").len() + PR_LABEL_WIDTH);
         let branch_max = width.saturating_sub(pr_width);
         let branch_display = summarize(branch, branch_max);
-        spans.push(Span::styled(branch_display, Style::default().fg(COLOR_BRANCH)));
+        spans.push(Span::styled(
+            branch_display,
+            Style::default().fg(COLOR_BRANCH),
+        ));
     }
     if let Some(num) = entry.git.pr_number {
         let (pr_color, label) = match entry.git.pr_state {

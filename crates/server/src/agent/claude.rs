@@ -128,7 +128,11 @@ fn read_context_pct(transcript_path: &str) -> Option<u8> {
     }
 
     let total = last_total?;
-    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     let pct = ((total as f64 / CONTEXT_WINDOW_TOKENS as f64) * 100.0).min(100.0) as u8;
     Some(pct)
 }

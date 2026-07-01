@@ -50,12 +50,24 @@ async fn async_main(args: Vec<String>) -> anyhow::Result<()> {
 }
 
 enum Subcommand {
-    Server { foreground: bool },
+    Server {
+        foreground: bool,
+    },
     Kill,
-    Switch { index: usize },
-    Close { session: Option<String> },
-    OpenTabs { session: Option<String> },
-    Capture { pane: Option<String>, probe: bool, lines: u32 },
+    Switch {
+        index: usize,
+    },
+    Close {
+        session: Option<String>,
+    },
+    OpenTabs {
+        session: Option<String>,
+    },
+    Capture {
+        pane: Option<String>,
+        probe: bool,
+        lines: u32,
+    },
     Tui,
 }
 

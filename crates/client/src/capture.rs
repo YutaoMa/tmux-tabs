@@ -111,11 +111,7 @@ async fn capture_and_print(pane_id: &str, lines: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn cmd_capture(
-    pane: Option<String>,
-    probe: bool,
-    lines: u32,
-) -> anyhow::Result<()> {
+pub async fn cmd_capture(pane: Option<String>, probe: bool, lines: u32) -> anyhow::Result<()> {
     // Explicit pane → just capture it. Works even outside tmux.
     if let Some(pane) = pane.as_deref() {
         return capture_and_print(pane, lines).await;
