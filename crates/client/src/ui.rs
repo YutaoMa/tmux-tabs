@@ -20,7 +20,7 @@ const COLOR_PR_CLOSED: Color = Color::Red;
 const COLOR_CURRENT: Color = Color::Green;
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPINNER_PERIOD_MS: u128 = 100;
+pub const SPINNER_PERIOD_MS: u64 = 100;
 
 /// Superscript digits 1-9 for the sidebar session-index prefix.
 const SUPERSCRIPT_DIGITS: &[&str] = &["¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
@@ -64,7 +64,7 @@ fn spinner_frame() -> &'static str {
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis());
-    SPINNER_FRAMES[((ms / SPINNER_PERIOD_MS) as usize) % SPINNER_FRAMES.len()]
+    SPINNER_FRAMES[((ms / u128::from(SPINNER_PERIOD_MS)) as usize) % SPINNER_FRAMES.len()]
 }
 
 fn render_sessions(frame: &mut Frame, app: &App, area: Rect) {

@@ -1,10 +1,11 @@
 use std::io;
+use std::time::Duration;
 
 use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use tmux_tabs_common::{
-    ClientMessage, Envelope, ServerMessage, SessionEntry, read_frame, write_frame,
+    AgentStatus, ClientMessage, Envelope, ServerMessage, SessionEntry, read_frame, write_frame,
 };
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc;
@@ -139,7 +140,17 @@ pub async fn run(
     while app.running {
         terminal.draw(|f| ui::render(f, &app))?;
 
+        // While any agent is processing, the spinner must keep animating even
+        // when no input or server update arrives (the server only broadcasts on
+        // state changes). Wake on a fixed cadence to advance it; when nothing is
+        // animating this branch is disabled and the loop blocks until an event.
+        let animating = app
+            .sessions
+            .iter()
+            .any(|e| matches!(e.agent, AgentStatus::Processing { .. }));
+
         tokio::select! {
+            () = tokio::time::sleep(Duration::from_millis(ui::SPINNER_PERIOD_MS)), if animating => {}
             evt = event_stream.next() => {
                 let Some(Ok(event)) = evt else { break };
                 let action = match event {
