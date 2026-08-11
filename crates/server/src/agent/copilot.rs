@@ -6,13 +6,17 @@
 //! us a new Copilot session is alive and what its sessionId is. The server
 //! then spawns a tail task ([`tail_loop`]) that reads new lines from
 //! `~/.copilot/session-state/<sessionId>/events.jsonl`, parses them, and
-//! dispatches typed events back into the tracker. The file is the source
-//! of truth for turn boundaries — Copilot has no per-turn `Stop` hook, but
-//! the JSONL emits an explicit `assistant.turn_end`, so we never need a
-//! stale-timeout heuristic.
+//! dispatches typed events back into the tracker.
+//!
+//! That file is the source of truth for turn boundaries — Copilot has no
+//! per-turn `Stop` hook, but the JSONL emits an explicit `assistant.turn_end`,
+//! so we never need a stale-timeout heuristic. A long reasoning step can emit
+//! nothing for many minutes, so reading silence as "idle" would drop the
+//! spinner while the session is still working; [`OwnerWatch`] probes the
+//! owning CLI process instead.
 
 use std::io::SeekFrom;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -227,6 +231,18 @@ const TAIL_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// hook time — Copilot may emit `sessionStart` slightly before the file
 /// is created.
 const FILE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often to check that the Copilot process owning this events file is
+/// still running, while the file is quiet.
+const LIVENESS_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+/// Backstop for when the owning process can't be identified at all (no
+/// `inuse.<pid>.lock` marker — e.g. a future Copilot release changes the
+/// scheme). Far longer than any plausible reasoning pause so it can't fire
+/// mid-turn, but bounded so a vanished CLI can't wedge the sidebar in
+/// "processing" forever.
+// `Duration::from_mins` would read better but is only stable since 1.91,
+// above this workspace's MSRV.
+#[allow(clippy::duration_suboptimal_units)]
+const UNKNOWN_OWNER_TIMEOUT: Duration = Duration::from_secs(1_800);
 
 /// Build the on-disk path for a Copilot session's event log.
 fn events_path(copilot_session_id: &str) -> Option<PathBuf> {
@@ -261,6 +277,115 @@ async fn open_events_file(path: &PathBuf) -> Option<File> {
     }
 }
 
+/// Extract the pid from an `inuse.<pid>.lock` file name.
+fn parse_lock_pid(file_name: &str) -> Option<u32> {
+    file_name
+        .strip_prefix("inuse.")?
+        .strip_suffix(".lock")?
+        .parse()
+        .ok()
+}
+
+/// Copilot marks a live session with an `inuse.<pid>.lock` file in the
+/// session directory, where the pid is the CLI process that owns it. Returns
+/// `None` if no such marker is present (which we treat as "unknown", never as
+/// "dead" — see [`UNKNOWN_OWNER_TIMEOUT`]).
+async fn owner_pid(session_dir: &Path) -> Option<u32> {
+    let mut entries = tokio::fs::read_dir(session_dir).await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        if let Some(pid) = name.to_str().and_then(parse_lock_pid) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+/// Whether `pid` still names a live process.
+fn process_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return true;
+    };
+    // SAFETY: `kill` with signal 0 performs the existence and permission
+    // checks without delivering a signal, so it has no effect beyond errno.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    // `EPERM` means the process exists but isn't ours; only `ESRCH` proves it
+    // is gone, so treat every other error as still alive.
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+/// Watches whether the Copilot CLI that owns an events file is still running.
+///
+/// Silence in the file is normal — a long reasoning step emits nothing for
+/// minutes — so the tail loop must never read it as "idle". This asks the OS
+/// instead, throttled to [`LIVENESS_CHECK_INTERVAL`].
+struct OwnerWatch {
+    session_dir: Option<PathBuf>,
+    pid: Option<u32>,
+    quiet_since: tokio::time::Instant,
+    last_check: tokio::time::Instant,
+}
+
+impl OwnerWatch {
+    async fn new(events_path: &Path) -> Self {
+        let session_dir = events_path.parent().map(Path::to_path_buf);
+        let pid = match session_dir.as_deref() {
+            Some(dir) => owner_pid(dir).await,
+            None => None,
+        };
+        let now = tokio::time::Instant::now();
+        Self {
+            session_dir,
+            pid,
+            quiet_since: now,
+            last_check: now,
+        }
+    }
+
+    fn saw_event(&mut self) {
+        self.quiet_since = tokio::time::Instant::now();
+    }
+
+    /// Probe whether the owning process is gone. Rate-limited: reports `false`
+    /// until the next check is due.
+    async fn check_gone(&mut self) -> bool {
+        if self.last_check.elapsed() < LIVENESS_CHECK_INTERVAL {
+            return false;
+        }
+        self.last_check = tokio::time::Instant::now();
+
+        // The marker can appear after the events file does, so keep looking
+        // until we find it.
+        if self.pid.is_none()
+            && let Some(dir) = self.session_dir.as_deref()
+        {
+            self.pid = owner_pid(dir).await;
+        }
+
+        match self.pid {
+            Some(pid) => !process_alive(pid),
+            None => self.quiet_since.elapsed() >= UNKNOWN_OWNER_TIMEOUT,
+        }
+    }
+}
+
+/// Evict this session's tracker entry and drop its task registration. Used
+/// both for an explicit `session.shutdown` event and when we detect that the
+/// owning process disappeared without emitting one.
+async fn finish_session(
+    state: &AppState,
+    session_name: &str,
+    pane_id: &str,
+    copilot_session_id: &str,
+) {
+    state
+        .dispatch_copilot_event(session_name, pane_id, CopilotEvent::SessionShutdown)
+        .await;
+    state.unregister_copilot_session(copilot_session_id).await;
+}
+
 /// Tail the events file for a Copilot session, dispatching each parsed
 /// event back into [`AppState`]. Returns when the session shuts down, the
 /// file disappears, or the task is aborted by the caller.
@@ -278,6 +403,18 @@ pub async fn tail_loop(
         warn!("copilot tail: HOME unset, cannot locate events.jsonl");
         return;
     };
+    tail_loop_at(state, session_name, pane_id, copilot_session_id, path).await;
+}
+
+/// [`tail_loop`] with the events-file path supplied directly, so tests can
+/// drive the loop against a temporary directory instead of the real `$HOME`.
+async fn tail_loop_at(
+    state: AppState,
+    session_name: String,
+    pane_id: String,
+    copilot_session_id: String,
+    path: PathBuf,
+) {
     let Some(mut file) = open_events_file(&path).await else {
         return;
     };
@@ -286,6 +423,7 @@ pub async fn tail_loop(
         return;
     }
 
+    let mut owner = OwnerWatch::new(&path).await;
     let mut reader = BufReader::new(file);
     let mut buf = String::new();
     debug!("copilot tail: started for session {copilot_session_id}");
@@ -294,22 +432,28 @@ pub async fn tail_loop(
         buf.clear();
         match reader.read_line(&mut buf).await {
             Ok(0) => {
-                // EOF — wait for new lines.
+                // EOF — wait for new lines. Quiet is not idle, so the only
+                // thing that ends the session here is a dead owner.
                 tokio::time::sleep(TAIL_POLL_INTERVAL).await;
+                if owner.check_gone().await {
+                    debug!("copilot tail: owner process gone for {copilot_session_id}, exiting");
+                    finish_session(&state, &session_name, &pane_id, &copilot_session_id).await;
+                    return;
+                }
             }
             Ok(_) => {
+                owner.saw_event();
                 let Some(event) = parse_line(&buf) else {
                     continue;
                 };
-                let shutdown = matches!(event, CopilotEvent::SessionShutdown);
+                if matches!(event, CopilotEvent::SessionShutdown) {
+                    debug!("copilot tail: session.shutdown for {copilot_session_id}, exiting");
+                    finish_session(&state, &session_name, &pane_id, &copilot_session_id).await;
+                    return;
+                }
                 state
                     .dispatch_copilot_event(&session_name, &pane_id, event)
                     .await;
-                if shutdown {
-                    debug!("copilot tail: session.shutdown for {copilot_session_id}, exiting");
-                    state.unregister_copilot_session(&copilot_session_id).await;
-                    return;
-                }
             }
             Err(e) => {
                 warn!("copilot tail: read error on {path:?}: {e}");
@@ -321,6 +465,8 @@ pub async fn tail_loop(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Instant;
 
     use super::*;
@@ -545,5 +691,194 @@ mod tests {
         let outcome = apply_event(&mut state, &CopilotEvent::Other);
         assert!(matches!(outcome, HandleOutcome::Ignored));
         assert!(matches!(state.status, AgentStatus::None));
+    }
+
+    #[test]
+    fn parse_lock_pid_reads_inuse_marker() {
+        assert_eq!(parse_lock_pid("inuse.57402.lock"), Some(57402));
+        assert_eq!(parse_lock_pid("inuse.0.lock"), Some(0));
+    }
+
+    #[test]
+    fn parse_lock_pid_rejects_other_files() {
+        assert_eq!(parse_lock_pid("events.jsonl"), None);
+        assert_eq!(parse_lock_pid("session.db"), None);
+        assert_eq!(parse_lock_pid("inuse.lock"), None);
+        assert_eq!(parse_lock_pid("inuse.notapid.lock"), None);
+        assert_eq!(parse_lock_pid("inuse.57402.lock.bak"), None);
+    }
+
+    #[test]
+    fn process_alive_detects_this_process() {
+        assert!(process_alive(std::process::id()));
+    }
+
+    #[test]
+    fn process_alive_is_conservative_for_unrepresentable_pids() {
+        // Anything we can't even convert to a `pid_t` must not be reported as
+        // dead — a false "dead" evicts a live session from the sidebar.
+        assert!(process_alive(u32::MAX));
+    }
+
+    /// A session directory that cleans itself up, including when a test panics
+    /// — cleanup at the end of a test body is skipped on unwind.
+    struct TempSessionDir(PathBuf);
+
+    impl TempSessionDir {
+        fn new(tag: &str) -> Self {
+            static COUNTER: AtomicU32 = AtomicU32::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "tmux-tabs-copilot-test-{}-{tag}-{n}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).expect("create temp session dir");
+            Self(dir)
+        }
+
+        fn join(&self, name: impl AsRef<Path>) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for TempSessionDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn append_line(path: &Path, line: &str) {
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .expect("open events file");
+        writeln!(f, "{line}").expect("append event");
+    }
+
+    /// A pid that is guaranteed not to be running: spawn a child, reap it (so
+    /// it isn't left as a zombie, which would still answer `kill(pid, 0)`),
+    /// and use its pid before the OS recycles it.
+    fn reaped_pid() -> u32 {
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("spawn helper process");
+        let pid = child.id();
+        child.wait().expect("reap helper process");
+        pid
+    }
+
+    /// Let the spawned tail task make progress. Tests run with `start_paused`,
+    /// so sleeping advances virtual time instantly and costs no wall clock.
+    async fn settle(rounds: u32, step: Duration) {
+        for _ in 0..rounds {
+            tokio::task::yield_now().await;
+            tokio::time::sleep(step).await;
+        }
+    }
+
+    async fn wait_for_processing(state: &AppState) -> bool {
+        for _ in 0..200 {
+            if matches!(
+                state.agent_status("main").await,
+                AgentStatus::Processing { .. }
+            ) {
+                return true;
+            }
+            settle(1, Duration::from_millis(100)).await;
+        }
+        false
+    }
+
+    /// Regression: Copilot emits nothing during a long reasoning step. The
+    /// tail loop must sit through that quietly without downgrading the
+    /// session, or the sidebar spinner disappears mid-turn.
+    #[tokio::test(start_paused = true)]
+    async fn tail_loop_holds_processing_through_a_long_silence() {
+        let dir = TempSessionDir::new("alive");
+        let events = dir.join("events.jsonl");
+        std::fs::write(&events, "").expect("create events file");
+        std::fs::write(
+            dir.join(format!("inuse.{}.lock", std::process::id())),
+            "lock",
+        )
+        .expect("create lock file");
+
+        let state = AppState::new();
+        let task = tokio::spawn(tail_loop_at(
+            state.clone(),
+            "main".into(),
+            "%1".into(),
+            "sid-alive".into(),
+            events.clone(),
+        ));
+
+        settle(10, Duration::from_millis(50)).await;
+        append_line(
+            &events,
+            r#"{"type":"user.message","data":{"content":"hi"}}"#,
+        );
+        assert!(
+            wait_for_processing(&state).await,
+            "user.message should drive the session to Processing"
+        );
+
+        // Go quiet for much longer than the old 120s status timeout.
+        settle(300, Duration::from_secs(1)).await;
+
+        assert!(
+            matches!(
+                state.agent_status("main").await,
+                AgentStatus::Processing { .. }
+            ),
+            "a silent reasoning pause must not clear Processing"
+        );
+        assert!(!task.is_finished(), "tail loop should still be tailing");
+
+        task.abort();
+    }
+
+    /// The flip side: silence plus a dead owner *is* the end of the session,
+    /// so the entry must be evicted rather than spinning forever.
+    #[tokio::test(start_paused = true)]
+    async fn tail_loop_evicts_when_owner_process_is_gone() {
+        let dir = TempSessionDir::new("dead");
+        let events = dir.join("events.jsonl");
+        std::fs::write(&events, "").expect("create events file");
+        std::fs::write(dir.join(format!("inuse.{}.lock", reaped_pid())), "lock")
+            .expect("create lock file");
+
+        let state = AppState::new();
+        let task = tokio::spawn(tail_loop_at(
+            state.clone(),
+            "main".into(),
+            "%1".into(),
+            "sid-dead".into(),
+            events.clone(),
+        ));
+
+        settle(10, Duration::from_millis(50)).await;
+        append_line(
+            &events,
+            r#"{"type":"user.message","data":{"content":"hi"}}"#,
+        );
+        assert!(wait_for_processing(&state).await);
+
+        for _ in 0..200 {
+            if task.is_finished() {
+                break;
+            }
+            settle(1, Duration::from_secs(1)).await;
+        }
+
+        assert!(
+            task.is_finished(),
+            "tail loop should exit once the owning CLI is gone"
+        );
+        assert!(
+            matches!(state.agent_status("main").await, AgentStatus::None),
+            "a dead owner should clear the session, not leave it spinning"
+        );
     }
 }

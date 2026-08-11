@@ -19,7 +19,25 @@ use std::time::Instant;
 
 use tmux_tabs_common::{AgentKind, AgentStatus};
 
+/// How long a transient status may go without an event before we assume the
+/// event stream was lost and fall back to idle. See [`expires_on_silence`].
 const TIMEOUT_SECS: u64 = 120;
+
+/// Whether an agent's transient status should be cleared after
+/// [`TIMEOUT_SECS`] of silence. The two agents report status very differently,
+/// so the timeout only applies where silence is really evidence of loss.
+const fn expires_on_silence(kind: AgentKind) -> bool {
+    match kind {
+        // Hook-driven and lossy: a `Stop` hook that never arrives (crash,
+        // killed hook, `--no-hooks`) leaves nothing else to clear the status.
+        AgentKind::Claude => true,
+        // File-driven, with explicit `assistant.turn_end` / `session.shutdown`
+        // boundaries, so silence only means the model is thinking — routinely
+        // for far longer than `TIMEOUT_SECS`. Liveness comes from the
+        // owning-process check in [`copilot::tail_loop`] instead.
+        AgentKind::Copilot => false,
+    }
+}
 
 pub(crate) struct SessionState {
     pub(super) pane_id: String,
@@ -244,11 +262,20 @@ impl AgentTracker {
     }
 
     /// Revert stuck transient states back to `None` after `TIMEOUT_SECS` of
-    /// silence. Returns true if state changed.
+    /// silence, for the agents that need it ([`expires_on_silence`]). Returns
+    /// true if state changed.
     pub fn expire_stale(&mut self) -> bool {
-        let now = Instant::now();
+        self.expire_stale_at(Instant::now())
+    }
+
+    /// [`Self::expire_stale`] with an injectable clock, so tests can age
+    /// entries without sleeping.
+    fn expire_stale_at(&mut self, now: Instant) -> bool {
         let mut changed = false;
-        for state in self.sessions.values_mut() {
+        for ((_, kind), state) in &mut self.sessions {
+            if !expires_on_silence(*kind) {
+                continue;
+            }
             let is_transient = matches!(
                 state.status,
                 AgentStatus::Processing { .. } | AgentStatus::WaitingForInput { .. }
@@ -285,6 +312,8 @@ impl AgentTracker {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn seed(
@@ -503,5 +532,108 @@ mod tests {
     fn active_agent_pane_returns_none_when_no_agent_registered() {
         let tracker = AgentTracker::new();
         assert_eq!(tracker.active_agent_pane("ghost"), None);
+    }
+
+    /// Claude's hook stream can silently stop (crash, dropped `Stop` hook),
+    /// so silence is the only signal we have that the turn is over.
+    #[test]
+    fn expire_stale_clears_silent_claude_processing() {
+        let mut tracker = AgentTracker::new();
+        seed(
+            &mut tracker,
+            "main",
+            AgentKind::Claude,
+            "%1",
+            AgentStatus::Processing {
+                activity: Some("thinking".into()),
+            },
+        );
+
+        let later = Instant::now() + Duration::from_secs(TIMEOUT_SECS + 60);
+        assert!(tracker.expire_stale_at(later));
+        assert!(matches!(tracker.status("main"), AgentStatus::None));
+    }
+
+    #[test]
+    fn expire_stale_keeps_silent_copilot_processing() {
+        let mut tracker = AgentTracker::new();
+        seed(
+            &mut tracker,
+            "main",
+            AgentKind::Copilot,
+            "%2",
+            AgentStatus::Processing {
+                activity: Some("Run: cargo test".into()),
+            },
+        );
+
+        let later = Instant::now() + Duration::from_secs(TIMEOUT_SECS * 10);
+        assert!(
+            !tracker.expire_stale_at(later),
+            "silence is not evidence that Copilot stopped working"
+        );
+        assert!(
+            matches!(
+                tracker.status("main"),
+                AgentStatus::Processing { activity: Some(ref a) } if a == "Run: cargo test"
+            ),
+            "spinner state must survive a long reasoning pause"
+        );
+    }
+
+    #[test]
+    fn expire_stale_keeps_copilot_waiting_for_input() {
+        let mut tracker = AgentTracker::new();
+        seed(
+            &mut tracker,
+            "main",
+            AgentKind::Copilot,
+            "%2",
+            AgentStatus::WaitingForInput {
+                question: Some("Run: rm -rf /tmp/x".into()),
+            },
+        );
+
+        let later = Instant::now() + Duration::from_secs(TIMEOUT_SECS * 10);
+        assert!(!tracker.expire_stale_at(later));
+        assert!(matches!(
+            tracker.status("main"),
+            AgentStatus::WaitingForInput { .. }
+        ));
+    }
+
+    /// The two agents share one map, so exempting Copilot must not also
+    /// exempt a Claude entry sitting in the same tmux session.
+    #[test]
+    fn expire_stale_is_per_agent_within_one_session() {
+        let mut tracker = AgentTracker::new();
+        seed(
+            &mut tracker,
+            "main",
+            AgentKind::Copilot,
+            "%2",
+            AgentStatus::Processing { activity: None },
+        );
+        seed(
+            &mut tracker,
+            "main",
+            AgentKind::Claude,
+            "%1",
+            AgentStatus::Processing { activity: None },
+        );
+
+        let later = Instant::now() + Duration::from_secs(TIMEOUT_SECS + 60);
+        assert!(tracker.expire_stale_at(later));
+
+        let claude = tracker
+            .sessions
+            .get(&("main".to_string(), AgentKind::Claude))
+            .unwrap();
+        let copilot = tracker
+            .sessions
+            .get(&("main".to_string(), AgentKind::Copilot))
+            .unwrap();
+        assert!(matches!(claude.status, AgentStatus::None));
+        assert!(matches!(copilot.status, AgentStatus::Processing { .. }));
     }
 }

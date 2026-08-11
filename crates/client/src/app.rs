@@ -4,18 +4,23 @@ use std::time::Duration;
 use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
-use tmux_tabs_common::{
-    AgentStatus, ClientMessage, Envelope, ServerMessage, SessionEntry, read_frame, write_frame,
-};
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tmux_tabs_common::{AgentStatus, ClientMessage, SessionEntry};
 use tokio::sync::mpsc;
 
+use crate::conn::ConnEvent;
 use crate::input::{self, Action};
 use crate::ui;
 
 pub enum Mode {
     Normal,
     Rename { session_name: String, input: String },
+}
+
+/// State of the link to the server.
+pub enum Link {
+    Connecting,
+    Up,
+    Down,
 }
 
 pub struct App {
@@ -26,6 +31,8 @@ pub struct App {
     pub selected: Option<usize>,
     pub mode: Mode,
     pub running: bool,
+    /// Whether the server link is up.
+    pub link: Link,
 }
 
 impl App {
@@ -36,6 +43,7 @@ impl App {
             selected: None,
             mode: Mode::Normal,
             running: true,
+            link: Link::Connecting,
         }
     }
 
@@ -109,28 +117,10 @@ impl App {
 /// Returns an error if the terminal frame draw fails.
 pub async fn run(
     terminal: &mut DefaultTerminal,
-    mut reader: OwnedReadHalf,
-    mut writer: OwnedWriteHalf,
-    pane_id: String,
+    mut events: mpsc::Receiver<ConnEvent>,
+    commands: mpsc::Sender<ClientMessage>,
 ) -> io::Result<()> {
     let mut app = App::new();
-
-    let reg = Envelope::Client(ClientMessage::Register {
-        pane_id: pane_id.clone(),
-    });
-    write_frame(&mut writer, &reg)
-        .await
-        .map_err(io::Error::other)?;
-
-    let (srv_tx, mut srv_rx) = mpsc::channel::<ServerMessage>(16);
-
-    tokio::spawn(async move {
-        while let Ok(Some(msg)) = read_frame::<_, ServerMessage>(&mut reader).await {
-            if srv_tx.send(msg).await.is_err() {
-                break;
-            }
-        }
-    });
 
     // OSC 2 + ST: set the containing tmux pane title to "tmux-tabs".
     print!("\x1b]2;tmux-tabs\x1b\\");
@@ -164,17 +154,20 @@ pub async fn run(
                         app.running = false;
                     }
                     Action::Send(cmd) => {
-                        let envelope = Envelope::Client(cmd);
-                        let _ = write_frame(&mut writer, &envelope).await;
+                        let _ = commands.try_send(cmd);
                     }
                 }
             }
-            msg = srv_rx.recv() => {
+            msg = events.recv() => {
                 match msg {
-                    Some(ServerMessage::StateUpdate { sessions, current_session }) => {
+                    Some(ConnEvent::State { sessions, current_session }) => {
+                        app.link = Link::Up;
                         app.apply_state_update(sessions, current_session);
                     }
-                    Some(ServerMessage::Shutdown) | None => {
+                    Some(ConnEvent::Disconnected) => {
+                        app.link = Link::Down;
+                    }
+                    Some(ConnEvent::Shutdown) | None => {
                         app.running = false;
                     }
                 }
