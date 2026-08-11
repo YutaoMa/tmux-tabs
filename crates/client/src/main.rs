@@ -1,10 +1,10 @@
 mod app;
 mod capture;
+mod conn;
 mod input;
 mod ui;
 
 use std::io::{IsTerminal, Read, Write};
-use std::process::Stdio;
 use std::time::Duration;
 
 use tmux_tabs_common::{
@@ -298,16 +298,15 @@ async fn resolve_target_session(provided: Option<String>) -> Option<String> {
 }
 
 async fn cmd_tui() -> anyhow::Result<()> {
-    ensure_server().await?;
-
-    let stream = UnixStream::connect(socket_path()).await?;
-    let (reader, writer) = stream.into_split();
-
-    let pane_id = current_pane_id();
+    let (events, commands) = conn::spawn(conn::Config {
+        socket: socket_path(),
+        pane_id: current_pane_id(),
+        autostart: true,
+    });
 
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
-    let result = app::run(&mut terminal, reader, writer, pane_id).await;
+    let result = app::run(&mut terminal, events, commands).await;
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
 
@@ -438,40 +437,4 @@ fn cmd_kill() -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-/// Ensure the server is running; spawn it from the sibling binary if not.
-async fn ensure_server() -> anyhow::Result<()> {
-    let sock = socket_path();
-    if UnixStream::connect(&sock).await.is_ok() {
-        return Ok(());
-    }
-
-    let server_bin = which_server();
-    std::process::Command::new(&server_bin)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-
-    for _ in 0..20 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if UnixStream::connect(&sock).await.is_ok() {
-            return Ok(());
-        }
-    }
-
-    anyhow::bail!("failed to start tmux-tabs-server");
-}
-
-fn which_server() -> std::path::PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(parent) = exe.parent()
-    {
-        let sibling = parent.join("tmux-tabs-server");
-        if sibling.exists() {
-            return sibling;
-        }
-    }
-    // Bare filename — std::process::Command searches PATH at spawn time.
-    std::path::PathBuf::from("tmux-tabs-server")
 }

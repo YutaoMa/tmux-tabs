@@ -148,7 +148,7 @@ impl AppState {
     /// using — Claude or Copilot.
     pub async fn active_agent_pane(&self) -> Option<(AgentKind, String)> {
         let state = self.state.read().await;
-        let active = state.sessions.iter().find(|s| s.attached)?;
+        let active = active_session(&state.sessions)?;
         state
             .agent
             .active_agent_pane(&active.name)
@@ -244,6 +244,14 @@ impl AppState {
         }
     }
 
+    /// Agent status for a tmux session. Test-only: it lets the Copilot tail
+    /// loop be driven end-to-end (file → tracker) without standing up a
+    /// client connection.
+    #[cfg(test)]
+    pub async fn agent_status(&self, session_name: &str) -> tmux_tabs_common::AgentStatus {
+        self.state.read().await.agent.status(session_name)
+    }
+
     /// Replace the pane→session map and prune agent state for vanished panes.
     /// Returns true if anything changed.
     pub async fn refresh_pane_map(&self, panes: HashMap<String, String>) -> bool {
@@ -326,10 +334,7 @@ impl AppState {
         }
 
         let bridge_payload = state.bridge.as_ref().map(|_| {
-            let active_session = state
-                .sessions
-                .iter()
-                .find(|s| s.attached)
+            let active_session = active_session(&state.sessions)
                 .map(|s| s.name.clone())
                 .unwrap_or_default();
             let session_names: Vec<String> =
@@ -349,6 +354,15 @@ impl AppState {
     }
 }
 
+/// The session the user is currently looking at: the most recently active of
+/// the attached ones.
+fn active_session(sessions: &[TmuxSession]) -> Option<&TmuxSession> {
+    sessions
+        .iter()
+        .filter(|s| s.attached)
+        .max_by_key(|s| s.activity)
+}
+
 /// Try to deliver a command to the bridge. If the bridge is missing or its
 /// channel is dead, drop the handle and clear browser state. Returns true
 /// only when the message was queued.
@@ -362,4 +376,38 @@ fn try_send_bridge(state: &mut State, cmd: BridgeCommand) -> bool {
         return false;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(name: &str, attached: bool, activity: u64) -> TmuxSession {
+        TmuxSession {
+            id: format!("${name}"),
+            name: name.to_string(),
+            windows: 1,
+            attached,
+            activity,
+            cwd: None,
+        }
+    }
+
+    #[test]
+    fn active_session_ignores_detached_sessions() {
+        let sessions = vec![session("alpha", false, 300), session("beta", true, 100)];
+        assert_eq!(active_session(&sessions).unwrap().name, "beta");
+    }
+
+    #[test]
+    fn active_session_prefers_the_most_recently_active_of_several_attached() {
+        let sessions = vec![session("alpha", true, 100), session("beta", true, 300)];
+        assert_eq!(active_session(&sessions).unwrap().name, "beta");
+    }
+
+    #[test]
+    fn active_session_is_none_when_nothing_is_attached() {
+        let sessions = vec![session("alpha", false, 300)];
+        assert!(active_session(&sessions).is_none());
+    }
 }

@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
 use tmux_tabs_common::{AgentStatus, PrState, SessionEntry};
 
-use crate::app::{App, Mode};
+use crate::app::{App, Link, Mode};
 
 const TEXT_DIM: Color = Color::DarkGray;
 const COLOR_ATTENTION: Color = Color::Rgb(255, 165, 0);
@@ -227,21 +227,32 @@ fn status_line(entry: &SessionEntry, width: usize, spinner: &'static str) -> Lin
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
-    match &app.mode {
-        Mode::Normal => {
-            let has_browser = app.sessions.iter().any(|e| e.browser.is_some());
-            let text = if has_browser {
-                " j/k ↵:switch r:rename          []"
-            } else {
-                " j/k ↵:switch r:rename"
-            };
-            let p = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(p, area);
-        }
-        Mode::Rename { input, .. } => {
-            let prompt = format!(" Rename: {input}█");
-            let p = Paragraph::new(prompt).style(Style::default().fg(Color::Cyan));
-            frame.render_widget(p, area);
-        }
+    if let Mode::Rename { input, .. } = &app.mode {
+        let prompt = format!(" Rename: {input}█");
+        let p = Paragraph::new(prompt).style(Style::default().fg(Color::Cyan));
+        frame.render_widget(p, area);
+        return;
     }
+
+    // A dropped link leaves stale sessions on screen, so say so rather than
+    // showing them as current.
+    let notice = match app.link {
+        Link::Up => None,
+        Link::Connecting => Some(" ⋯ connecting to server…"),
+        Link::Down => Some(" ⚠ server offline — retrying…"),
+    };
+    if let Some(notice) = notice {
+        let p = Paragraph::new(notice).style(Style::default().fg(COLOR_ATTENTION));
+        frame.render_widget(p, area);
+        return;
+    }
+
+    let has_browser = app.sessions.iter().any(|e| e.browser.is_some());
+    let text = if has_browser {
+        " j/k ↵:switch r:rename          []"
+    } else {
+        " j/k ↵:switch r:rename"
+    };
+    let p = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(p, area);
 }
