@@ -2,6 +2,78 @@
 
 Sidebar for managing tmux sessions — with first-class Claude Code and GitHub Copilot CLI integration, plus git and Chrome.
 
+<p align="center">
+  <img src="docs/images/window.png" alt="The tmux-tabs sidebar pinned to the left of a tmux window" width="900">
+</p>
+
+## Features
+
+### Every session on one card
+
+<img src="docs/images/sidebar.png" alt="Anatomy of a session card" width="220" align="right">
+
+- **Name**, prefixed with its `prefix + g` index — the current session is bold green, and context-window usage sits on the right
+- **Git branch** plus a PR badge coloured by state: open / draft / merged / closed
+- **Chrome tab group** size, when the browser bridge is connected
+- **Topic** — what the AI session is currently working on
+- **Status** — a spinner and the running tool while the agent works, or an orange `?` when it's waiting on you
+
+Cards are driven by hooks, so Claude Code and Copilot CLI panes report the same
+way: you can see at a glance which session is blocked on you and which is still
+grinding.
+
+<br clear="right">
+
+### Switch, rename, reconnect
+
+<p align="center">
+  <img src="docs/images/sidebar-states.png" alt="Selection, rename prompt, and the server-offline notice" width="760">
+</p>
+
+`j`/`k` move the selection, `Enter` switches, `r` renames in place, and the
+footer turns orange if the daemon goes away so stale cards are never mistaken
+for live ones.
+
+### Chrome tab groups follow your tmux session
+
+<img src="docs/images/chrome-popup.png" alt="The extension popup listing tab groups per tmux session" width="240" align="right">
+
+Each tmux session gets a matching Chrome tab group. Switching sessions collapses
+every other group; expanding a group in Chrome switches tmux to that session.
+Closing a session closes its tabs, and `prefix + g + o` brings a group back.
+
+The extension popup lists the groups it is tracking and their tab counts.
+
+<br clear="right">
+
+<p align="center">
+  <img src="docs/images/chrome-tab-groups.png" alt="Illustration of the Chrome tab strip: one grey group per tmux session, with only the attached session's group expanded" width="880">
+</p>
+
+### Send web content to the AI pane
+
+<p align="center">
+  <img src="docs/images/chrome-send-to-ai.png" alt="Illustration of the Chrome right-click menu on selected text, showing the Send selection to AI item" width="700">
+</p>
+
+Right-click any page with the extension installed to get **Send selection to
+AI** and **Send page to AI**. The text is piped straight into the AI pane of the
+tmux session that owns the tab group, so research lands in the conversation
+without a copy-paste round trip.
+
+### Pull a pane into the conversation
+
+<p align="center">
+  <img src="docs/images/grab.png" alt="A failing test run in the left pane, pulled into a Copilot CLI session next door" width="900">
+</p>
+
+`/grab` hands a neighbouring pane's output to your AI agent as context — no
+copy-paste and no re-running the command just to show it what broke. It wraps
+`tmux-tabs capture`, which picks the sibling pane automatically, or asks which
+one when the window has several. The slash command ships for Claude Code; any
+agent that can run a shell command — Copilot CLI above — can call
+`tmux-tabs capture` itself.
+
 ## Requirements
 
 - tmux 3.0+

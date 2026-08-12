@@ -2,6 +2,8 @@ mod app;
 mod capture;
 mod conn;
 mod input;
+#[cfg(feature = "screenshots")]
+mod screenshot;
 mod ui;
 
 use std::io::{IsTerminal, Read, Write};
@@ -23,6 +25,13 @@ fn main() -> anyhow::Result<()> {
     if args.get(1).map(String::as_str) == Some("notify") {
         cmd_notify_sync(&args[2..]);
         return Ok(());
+    }
+
+    // Dev-only README screenshot generator.
+    #[cfg(feature = "screenshots")]
+    if args.get(1).map(String::as_str) == Some("__screenshot") {
+        let out = args.get(2).map_or("docs/images", String::as_str);
+        return screenshot::run(std::path::Path::new(out));
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
