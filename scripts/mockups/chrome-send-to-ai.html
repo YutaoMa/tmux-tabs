@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<!--
+  Illustration of the Chrome right-click menu contributed by the extension.
+
+  Chrome ignores --load-extension on recent builds, so the real menu can't be
+  captured headlessly. The item text matches background.js verbatim. Only
+  "Send selection to AI" is drawn because its sibling "Send page to AI" is
+  registered for the "page" context, which Chrome suppresses while text is
+  selected. The generic puzzle-piece icon is what Chrome shows for an extension
+  that declares no icons, as this one does.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      width: 700px;
+      height: 420px;
+      font-family: system-ui, -apple-system, "SF Pro Text", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      background: transparent;
+    }
+
+    /* Rounded so the plate doesn't read as a hard slab on a light page. */
+    .backdrop {
+      width: 100%;
+      height: 100%;
+      border-radius: 12px;
+      background: #202124;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* The menu lives outside .page so the card's rounded clip can't cut it. */
+    .stage { position: relative; width: 640px; height: 360px; }
+
+    .page {
+      width: 100%;
+      height: 100%;
+      padding: 24px 28px;
+      border-radius: 8px;
+      background: #fff;
+      color: #202124;
+      overflow: hidden;
+    }
+
+    .crumb { font-size: 10.5px; color: #5f6368; }
+    h1 { margin: 7px 0 12px; font-size: 18px; font-weight: 600; }
+    p {
+      margin: 0 0 11px;
+      font-size: 12.5px;
+      line-height: 1.6;
+      color: #3c4043;
+      max-width: 400px;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11.5px;
+      background: #f1f3f4;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    pre {
+      margin: 0;
+      padding: 10px 12px;
+      max-width: 400px;
+      border-radius: 6px;
+      background: #f8f9fa;
+      border: 1px solid #e8eaed;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11.5px;
+      line-height: 1.55;
+      color: #3c4043;
+    }
+    pre .kw { color: #a626a4; }
+    pre .fn { color: #4078f2; }
+    /* macOS text selection in a focused window. */
+    mark { background: rgba(0, 122, 255, 0.30); color: inherit; }
+
+    /* native macOS context menu */
+    .menu {
+      position: absolute;
+      top: 152px;
+      left: 232px;
+      width: 272px;
+      padding: 4px 0;
+      border-radius: 8px;
+      background: #2F2F31;
+      border: 0.5px solid rgba(255, 255, 255, 0.16);
+      box-shadow: 0 14px 38px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+      color: rgba(255, 255, 255, 0.92);
+      font-size: 12.5px;
+    }
+    .item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      height: 22px;
+      margin: 0 4px;
+      padding: 0 9px;
+      border-radius: 5px;
+      white-space: nowrap;
+    }
+    .item .label { overflow: hidden; text-overflow: ellipsis; }
+    .item .arrow { margin-left: auto; opacity: .5; font-size: 9px; }
+    .item.on { background: #0A63CE; color: #fff; }
+    .sep { height: 1px; margin: 4px 11px; background: rgba(255, 255, 255, 0.13); }
+    .icon { width: 14px; height: 14px; flex: none; }
+  </style>
+</head>
+<body>
+  <div class="backdrop">
+  <div class="stage">
+    <div class="page">
+      <div class="crumb">docs.rs &rsaquo; governor &rsaquo; rate limiting</div>
+      <h1>Token bucket</h1>
+      <p>
+        A bucket holds up to <code>capacity</code> tokens and regains them at a
+        fixed rate. Each request removes one token; when the bucket is empty
+        the request is rejected until the next refill tick.
+      </p>
+      <p>
+        Idle time must not accrue credit forever:<br>
+        <mark>refill must saturate at capacity</mark>, never
+        accumulate past it. A bucket left idle for an hour should still
+        release only one full burst.
+      </p>
+<pre><span class="kw">fn</span> <span class="fn">refill</span>(&amp;<span class="kw">mut</span> self, now: Instant) {
+    self.tokens = (self.tokens + self.earned(now))
+        .<span class="fn">min</span>(self.capacity);
+}</pre>
+    </div>
+
+    <div class="menu">
+      <div class="item"><span class="label">Copy</span></div>
+      <div class="item">
+        <span class="label">Search Google for &ldquo;refill must satu&hellip;&rdquo;</span>
+      </div>
+      <div class="item"><span class="label">Print&hellip;</span></div>
+      <div class="sep"></div>
+      <div class="item"><span class="label">Speech</span><span class="arrow">&#9654;</span></div>
+      <div class="item"><span class="label">Services</span><span class="arrow">&#9654;</span></div>
+      <div class="sep"></div>
+      <div class="item on">
+        <svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7s2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z"/>
+        </svg>
+        <span class="label">Send selection to AI</span>
+      </div>
+      <div class="sep"></div>
+      <div class="item"><span class="label">Inspect</span></div>
+    </div>
+  </div>
+  </div>
+</body>
+</html>

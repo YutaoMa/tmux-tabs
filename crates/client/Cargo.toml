@@ -10,6 +10,10 @@ description = "TUI sidebar and CLI for tmux-tabs."
 name = "tmux-tabs"
 path = "src/main.rs"
 
+[features]
+# Dev-only: builds the README screenshot generator (`__screenshot` subcommand).
+screenshots = []
+
 [dependencies]
 tmux-tabs-common = { path = "../common" }
 anyhow = { workspace = true }

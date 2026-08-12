@@ -19,7 +19,7 @@ const COLOR_PR_MERGED: Color = Color::Magenta;
 const COLOR_PR_CLOSED: Color = Color::Red;
 const COLOR_CURRENT: Color = Color::Green;
 
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 pub const SPINNER_PERIOD_MS: u64 = 100;
 
 /// Superscript digits 1-9 for the sidebar session-index prefix.

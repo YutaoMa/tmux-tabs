@@ -1,0 +1,28 @@
+[32m~/dev/tmux-tabs[39m $ [32mgit[39m -c color.ui=always log --oneline --graph -5
+* [33m642e630 ([1m[36mHEAD[0m[33m -> [1m[32mmain[0m[33m, [1m[31morigin/main[0m[33m, [1m[31morigin/HEAD[0m[33m)[39m fix: keep the sidebar ali
+ve across server restarts and long Copilot turns (#12)
+* [33m95a2b7d[39m style: apply cargo fmt across the workspace
+* [33m8c2c929[39m fix: keep the sidebar spinner animating while an agent is processi
+ng
+* [33m1ea9a33[39m feat: support Copilot in Chrome extension's Send To feature (#11)
+* [33m1e687de[39m feat: add GitHub Copilot CLI support (#10)
+[32m~/dev/tmux-tabs[39m $ [32mcargo[39m test -p tmux-tabs-common --color=always [33m2>&[39m1 | [32mgrep[39m
+-v [33m"^$"[39m | [32mhead[39m -12
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+[1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/tmux_tabs_common-32fee1
+65253d88c0)
+running 6 tests
+test protocol::tests::agent_kind_serializes_as_pascal_case ... ok
+test model::tests::session_entry_serializes_with_claude_key ... ok
+test protocol::tests::hook_notification_defaults_to_claude_agent ... ok
+test model::tests::session_entry_deserializes_legacy_claude_key ... ok
+test protocol::tests::hook_notification_omits_copilot_session_id_when_absent
+ ... ok
+test protocol::tests::hook_notification_preserves_explicit_agent ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;
+finished in 0.00s
+[1m[92m   Doc-tests[0m tmux_tabs_common
+running 0 tests
+[32m~/dev/tmux-tabs[39m $
+
+

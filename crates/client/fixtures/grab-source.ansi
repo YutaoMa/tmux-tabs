@@ -1,0 +1,26 @@
+~/dev/api-gateway $ [32mcargo[39m test -q --offline --test limit
+er
+
+running 2 tests
+[32m.[39m 1/2
+refill_is_capped_at_capacity --- [31mFAILED[39m
+
+failures:
+
+---- refill_is_capped_at_capacity stdout ----
+
+thread 'refill_is_capped_at_capacity' (2369019) panicked
+ at tests/limiter.rs:18:5:
+refill must saturate at capacity, not accumulate
+note: run with `RUST_BACKTRACE=1` environment variable t
+o display a backtrace
+
+
+failures:
+    refill_is_capped_at_capacity
+
+test result: [31mFAILED[39m. 1 passed; 1 failed; 0 ignored; 0 me
+asured; 0 filtered out; finished in 0.00s
+
+[1m[91merror[0m: test failed, to rerun pass `--test limiter`
+~/dev/api-gateway $
