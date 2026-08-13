@@ -1,3 +1,5 @@
+#[cfg(feature = "screenshots")]
+mod apng;
 mod app;
 mod capture;
 mod conn;
@@ -32,6 +34,11 @@ fn main() -> anyhow::Result<()> {
     if args.get(1).map(String::as_str) == Some("__screenshot") {
         let out = args.get(2).map_or("docs/images", String::as_str);
         return screenshot::run(std::path::Path::new(out));
+    }
+
+    #[cfg(feature = "screenshots")]
+    if args.get(1).map(String::as_str) == Some("__apng") {
+        return apng::main(&args[2..]);
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

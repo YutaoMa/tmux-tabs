@@ -10,7 +10,7 @@ Sidebar for managing tmux sessions — with first-class Claude Code and GitHub C
 
 ### Every session on one card
 
-<img src="docs/images/sidebar.png" alt="Anatomy of a session card" width="220" align="right">
+<img src="docs/images/cards.png" alt="A session card updating as agents work: the context fills, a session stops to ask permission, and a draft PR opens" width="220" align="right">
 
 - **Name**, prefixed with its `prefix + g` index — the current session is bold green, and context-window usage sits on the right
 - **Git branch** plus a PR badge coloured by state: open / draft / merged / closed
@@ -26,13 +26,25 @@ grinding.
 
 ### Switch, rename, reconnect
 
-<p align="center">
-  <img src="docs/images/sidebar-states.png" alt="Selection, rename prompt, and the server-offline notice" width="760">
-</p>
+<img src="docs/images/rename.png" alt="Pressing r opens the rename prompt, the name is edited a keystroke at a time, and Enter commits it" width="220" align="right">
 
 `j`/`k` move the selection, `Enter` switches, `r` renames in place, and the
 footer turns orange if the daemon goes away so stale cards are never mistaken
 for live ones.
+
+<br clear="right">
+
+<img src="docs/images/switch.png" alt="The mouse wheel steps the current session down the sidebar, then a click jumps straight back to the top card" width="220" align="right">
+
+The sidebar is mouse-driven too: rolling the wheel over it steps through
+sessions one at a time, and a click switches straight to the card under the
+pointer — no keyboard round trip when you already have a hand on the mouse.
+
+<br clear="right">
+
+<p align="center">
+  <img src="docs/images/sidebar-states.png" alt="Selection, rename prompt, and the server-offline notice" width="760">
+</p>
 
 ### Chrome tab groups follow your tmux session
 
@@ -47,13 +59,13 @@ The extension popup lists the groups it is tracking and their tab counts.
 <br clear="right">
 
 <p align="center">
-  <img src="docs/images/chrome-tab-groups.png" alt="Illustration of the Chrome tab strip: one grey group per tmux session, with only the attached session's group expanded" width="880">
+  <img src="docs/images/chrome-tab-groups.png" alt="The Chrome tab strip following the tmux session: one grey group per session, with only the attached session's group expanded" width="880">
 </p>
 
 ### Send web content to the AI pane
 
 <p align="center">
-  <img src="docs/images/chrome-send-to-ai.png" alt="Illustration of the Chrome right-click menu on selected text, showing the Send selection to AI item" width="700">
+  <img src="docs/images/chrome-send-to-ai.png" alt="Selecting text, choosing Send selection to AI from the right-click menu, and the quoted selection arriving in the AI pane" width="700">
 </p>
 
 Right-click any page with the extension installed to get **Send selection to
@@ -64,7 +76,7 @@ without a copy-paste round trip.
 ### Pull a pane into the conversation
 
 <p align="center">
-  <img src="docs/images/grab.png" alt="A failing test run in the left pane, pulled into a Copilot CLI session next door" width="900">
+  <img src="docs/images/grab.png" alt="Typing /grab into a Copilot CLI pane, which then reads the failing test from the pane next door and explains it" width="900">
 </p>
 
 `/grab` hands a neighbouring pane's output to your AI agent as context — no

@@ -6,13 +6,23 @@ set -euo pipefail
 #
 # The sidebar is drawn by the real UI code (crates/client/src/screenshot.rs)
 # into an off-screen buffer and serialised to SVG; headless Chrome then
-# rasterises each SVG to a 2x PNG. No tmux session or running server is
-# involved, so the output is byte-for-byte reproducible.
+# rasterises each SVG to a 2x PNG, and animations are stitched into an APNG by
+# crates/client/src/apng.rs. No tmux session or running server is involved, so
+# the output is byte-for-byte reproducible.
+#
+# Needs Chrome or Chromium.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/docs/images"
 WORK="$(mktemp -d)"
+SCALE=2
 trap 'rm -rf "$WORK"' EXIT
+
+# Both dev-only subcommands live behind the `screenshots` feature.
+generator() {
+    cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -p tmux-tabs-client \
+        --features screenshots -- "$@"
+}
 
 find_chrome() {
     local candidates=(
@@ -37,31 +47,72 @@ CHROME="$(find_chrome)" || {
     exit 1
 }
 
-# shot <name> <width> <height> <url>
+# render <png> <width> <height> <url>
 # Chrome is noisy on stderr, so it is silenced and the PNG checked instead.
-shot() {
-    local name=$1 width=$2 height=$3 url=$4
-    local png="$OUT/$name.png"
+render() {
+    local png=$1 width=$2 height=$3 url=$4
     rm -f "$png"
     "$CHROME" --headless --disable-gpu --no-sandbox --hide-scrollbars \
-        --force-device-scale-factor=2 --default-background-color=00000000 \
+        --force-device-scale-factor="$SCALE" --default-background-color=00000000 \
         --window-size="$width,$height" --screenshot="$png" "$url" 2>/dev/null
     if [[ ! -s "$png" ]]; then
-        echo "error: Chrome produced no output for $name" >&2
+        echo "error: Chrome produced no output for $png" >&2
         exit 1
     fi
-    echo "wrote $png (${width}x${height} @2x)"
+}
+
+# shot <name> <width> <height> <url> — a still, straight into docs/images.
+shot() {
+    local name=$1 width=$2 height=$3 url=$4
+    render "$OUT/$name.png" "$width" "$height" "$url"
+    echo "wrote $OUT/$name.png (${width}x${height} @${SCALE}x)"
+}
+
+# The SVG root carries the exact pixel size; match the viewport to it so
+# nothing is cropped or letterboxed.
+svg_size() {
+    sed -n 's/.*width="\([0-9]*\)" height="\([0-9]*\)".*/\1 \2/p' "$1" | head -1
+}
+
+# html_anim <name> <width> <height> <file> <fragment:delay_ms>...
+# Renders one whole-canvas frame per stage of a mock-up, which selects its
+# stage from the URL fragment. The generator finds the changed region itself,
+# since there are no terminal cells to diff here.
+html_anim() {
+    local name=$1 width=$2 height=$3 file=$4
+    shift 4
+    local dir="$WORK/$name"
+    mkdir -p "$dir"
+    : > "$dir/frames.txt"
+    local index=0 spec idx
+    for spec in "$@"; do
+        printf -v idx '%03d' "$index"
+        render "$dir/$idx.png" "$width" "$height" "file://$file#${spec%%:*}"
+        printf '%s %s\n' "$idx" "${spec##*:}" >> "$dir/frames.txt"
+        index=$((index + 1))
+    done
+    generator __apng "$OUT/$name.png" "$dir" "$SCALE"
 }
 
 mkdir -p "$OUT"
-cargo run --quiet --manifest-path "$ROOT/Cargo.toml" -p tmux-tabs-client \
-    --features screenshots -- __screenshot "$WORK"
+generator __screenshot "$WORK"
 
 for svg in "$WORK"/*.svg; do
-    # The SVG root carries the exact pixel size; match the viewport to it so
-    # nothing is cropped or letterboxed.
-    read -r w h < <(sed -n 's/.*width="\([0-9]*\)" height="\([0-9]*\)".*/\1 \2/p' "$svg" | head -1)
+    read -r w h < <(svg_size "$svg")
     shot "$(basename "$svg" .svg)" "$w" "$h" "file://$svg"
+done
+
+# Animations: each subdirectory holds one SVG per frame plus a manifest giving
+# each frame's offset into the canvas. Every frame after the first covers only
+# the region that changed, so they rasterise fast and stitch into a small APNG.
+for dir in "$WORK"/*/; do
+    [[ -f "$dir/000.svg" ]] || continue
+    name="$(basename "$dir")"
+    while read -r idx _; do
+        read -r w h < <(svg_size "$dir/$idx.svg")
+        render "$dir/$idx.png" "$w" "$h" "file://$dir/$idx.svg"
+    done < "$dir/frames.txt"
+    generator __apng "$OUT/$name.png" "$dir" "$SCALE"
 done
 
 # The extension popup is rendered from the real popup.html/popup.js, with only
@@ -92,6 +143,10 @@ shot chrome-popup 264 152 "file://$POPUP/popup.html"
 # Chrome ignores --load-extension on current builds, so the tab strip and the
 # right-click menu cannot be captured from a real browser. Those two are
 # hand-built HTML illustrations; each file's header records what it keeps
-# faithful to the extension.
-shot chrome-tab-groups 880 98 "file://$ROOT/scripts/mockups/chrome-tab-groups.html"
-shot chrome-send-to-ai 700 420 "file://$ROOT/scripts/mockups/chrome-send-to-ai.html"
+# faithful to the extension. Both are animated by stepping the stage named in
+# the URL fragment.
+html_anim chrome-tab-groups 880 98 "$ROOT/scripts/mockups/chrome-tab-groups.html" \
+    tmux-tabs:1500 api-gateway:1700 tonic:2600
+
+html_anim chrome-send-to-ai 700 540 "$ROOT/scripts/mockups/chrome-send-to-ai.html" \
+    0:900 1:750 2:700 3:950 4:2600

@@ -6,6 +6,10 @@
   be captured headlessly. This mock-up mirrors what background.js actually does:
   one group per tmux session, always created with color "grey", the current
   session's group expanded and every other group collapsed.
+
+  The strip is rebuilt from SESSIONS for the session named in the URL hash
+  (e.g. #tonic), so gen-screenshots.sh can render one frame per switch and
+  stitch them into an animation. With no hash it renders the still.
 -->
 <html>
 <head>
@@ -53,6 +57,7 @@
     .lights i:nth-child(3) { background: #28C840; }
 
     /* A collapsed group is just its title pill. */
+    .groups { display: flex; align-items: flex-end; gap: 6px; }
     .chip {
       display: flex;
       align-items: center;
@@ -150,24 +155,7 @@
   <div class="window">
     <div class="strip">
       <div class="lights"><i></i><i></i><i></i></div>
-
-      <!-- Collapsed: a tmux session that isn't the current one. -->
-      <div class="chip">api-gateway</div>
-      <div class="chip">tonic</div>
-
-      <!-- Expanded: the attached tmux session. -->
-      <div class="group">
-        <div class="chip">tmux-tabs</div>
-        <div class="tab active">
-          <span class="favicon" style="background:#DE6B33"></span>
-          <span class="title">ratatui &mdash; Rust</span>
-        </div>
-        <div class="tab">
-          <span class="favicon" style="background:#8B949E"></span>
-          <span class="title">YutaoMa/tmux-tabs</span>
-        </div>
-      </div>
-
+      <div class="groups"></div>
       <div class="plus">+</div>
     </div>
 
@@ -177,12 +165,85 @@
         <svg class="lock" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM9 8V6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9z"/>
         </svg>
-        <span>docs.rs<b>/ratatui/latest/ratatui/widgets</b></span>
+        <span class="url"></span>
       </div>
       <svg class="ext" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
         <path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7s2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z"/>
       </svg>
     </div>
   </div>
+
+  <script>
+    // One entry per tmux session, in tab-strip order. Each session's group
+    // holds the tabs that were opened while working in it.
+    const SESSIONS = [
+      {
+        name: "api-gateway",
+        host: "docs.rs",
+        path: "/governor/latest/governor/struct.RateLimiter.html",
+        tabs: [
+          { title: "governor — Rust", favicon: "#DE6B33" },
+          { title: "Token bucket — Wikipedia", favicon: "#B0B4B8" },
+        ],
+      },
+      {
+        name: "tmux-tabs",
+        host: "docs.rs",
+        path: "/ratatui/latest/ratatui/widgets",
+        tabs: [
+          { title: "ratatui — Rust", favicon: "#DE6B33" },
+          { title: "YutaoMa/tmux-tabs", favicon: "#8B949E" },
+        ],
+      },
+      {
+        name: "tonic",
+        host: "github.com",
+        path: "/hyperium/tonic/pull/2210",
+        tabs: [
+          { title: "xds routing #2210", favicon: "#8B949E" },
+          { title: "tonic — Rust", favicon: "#DE6B33" },
+        ],
+      },
+    ];
+
+    function render(currentName) {
+      const current = SESSIONS.find((s) => s.name === currentName) || SESSIONS[1];
+      const strip = document.querySelector(".groups");
+      strip.replaceChildren();
+
+      for (const session of SESSIONS) {
+        const chip = document.createElement("div");
+        chip.className = "chip";
+        chip.textContent = session.name;
+
+        // Collapsed groups are just their title pill; only the current
+        // session's group shows its tabs.
+        if (session !== current) {
+          strip.append(chip);
+          continue;
+        }
+        const group = document.createElement("div");
+        group.className = "group";
+        group.append(chip);
+        session.tabs.forEach((tab, index) => {
+          const el = document.createElement("div");
+          el.className = index === 0 ? "tab active" : "tab";
+          el.innerHTML =
+            '<span class="favicon"></span><span class="title"></span>';
+          el.querySelector(".favicon").style.background = tab.favicon;
+          el.querySelector(".title").textContent = tab.title;
+          group.append(el);
+        });
+        strip.append(group);
+      }
+
+      document.querySelector(".url").replaceChildren(
+        current.host,
+        Object.assign(document.createElement("b"), { textContent: current.path }),
+      );
+    }
+
+    render(decodeURIComponent(location.hash.slice(1)));
+  </script>
 </body>
 </html>

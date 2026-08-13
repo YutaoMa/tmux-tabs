@@ -11,8 +11,9 @@ name = "tmux-tabs"
 path = "src/main.rs"
 
 [features]
-# Dev-only: builds the README screenshot generator (`__screenshot` subcommand).
-screenshots = []
+# Dev-only: builds the README screenshot generator (`__screenshot` and
+# `__apng` subcommands).
+screenshots = ["dep:flate2", "dep:crc32fast"]
 
 [dependencies]
 tmux-tabs-common = { path = "../common" }
@@ -24,6 +25,8 @@ ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3"
 libc = "0.2"
+flate2 = { version = "1", optional = true }
+crc32fast = { version = "1", optional = true }
 
 [lints]
 workspace = true
