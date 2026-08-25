@@ -6,9 +6,9 @@ set -euo pipefail
 #
 # The sidebar is drawn by the real UI code (crates/client/src/screenshot.rs)
 # into an off-screen buffer and serialised to SVG; headless Chrome then
-# rasterises each SVG to a 2x PNG, and animations are stitched into an APNG by
-# crates/client/src/apng.rs. No tmux session or running server is involved, so
-# the output is byte-for-byte reproducible.
+# rasterises each SVG to a 2x PNG, and animations are stitched into a looping
+# APNG by crates/client/src/apng.rs. No tmux session or running server is
+# involved, so the output is byte-for-byte reproducible.
 #
 # Needs Chrome or Chromium.
 

@@ -25,7 +25,9 @@
 //!
 //! Either way frame 000 covers the whole canvas and later frames patch only
 //! what moved, which is what keeps a multi-second animation to a few tens of
-//! kilobytes. A manifest may not mix the two forms.
+//! kilobytes. A manifest may not mix the two forms. Because frame 000 repaints
+//! every pixel, a loop restarts from a clean canvas however far the patches
+//! got, so the animation plays forever by default.
 //!
 //! Compiled out unless the `screenshots` feature is enabled.
 
@@ -460,6 +462,8 @@ fn frame_control(sequence: u32, frame: &Placed) -> Vec<u8> {
     payload
 }
 
+/// Stitch the placed frames into an APNG that repeats `plays` times, or
+/// forever when `plays` is 0.
 fn assemble(placed: &[Placed], plays: u32) -> Result<Vec<u8>> {
     let canvas = placed.first().context("no frames")?;
     let (width, height) = (canvas.png.width, canvas.png.height);
@@ -518,8 +522,13 @@ fn build(out: &Path, dir: &Path, scale: u32, plays: u32) -> Result<()> {
     let seconds = f64::from(u32::from(
         placed.iter().map(|frame| frame.delay_ms).sum::<u16>(),
     )) / 1000.0;
+    let repeat = match plays {
+        0 => "looping".to_string(),
+        1 => "once".to_string(),
+        n => format!("{n} plays"),
+    };
     println!(
-        "wrote {} ({} frames, {}x{}, {seconds:.1}s, {} KB)",
+        "wrote {} ({} frames, {}x{}, {seconds:.1}s {repeat}, {} KB)",
         out.display(),
         placed.len(),
         placed[0].png.width,
@@ -531,9 +540,9 @@ fn build(out: &Path, dir: &Path, scale: u32, plays: u32) -> Result<()> {
 
 pub fn main(args: &[String]) -> Result<()> {
     let ([out, dir, scale], plays) = match args {
-        [out, dir, scale] => ([out, dir, scale], 1),
+        [out, dir, scale] => ([out, dir, scale], 0),
         [out, dir, scale, plays] => ([out, dir, scale], plays.parse()?),
-        _ => bail!("usage: __apng <out.png> <frames-dir> <scale> [plays]"),
+        _ => bail!("usage: __apng <out.png> <frames-dir> <scale> [plays; 0 = loop forever]"),
     };
     build(Path::new(out), Path::new(dir), scale.parse()?, plays)
 }
@@ -661,5 +670,38 @@ mod tests {
             delay_ms: 10,
         };
         assert!(assemble(&[canvas, overflowing], 1).is_err());
+    }
+
+    /// `acTL` carries the play count, and 0 is the spec's "loop forever" —
+    /// anything else leaves the README animations frozen after one pass.
+    #[test]
+    fn assemble_records_the_play_count() {
+        let frame = |x: u32, y: u32, size: u32| super::Placed {
+            png: encode(size, size, &gradient(size, size)).expect("encode"),
+            x,
+            y,
+            delay_ms: 10,
+        };
+        let frames = [frame(0, 0, 4), frame(1, 1, 2)];
+
+        assert_eq!(actl(&assemble(&frames, 0).expect("assemble")), (2, 0));
+        assert_eq!(actl(&assemble(&frames, 3).expect("assemble")), (2, 3));
+    }
+
+    /// The `(frame count, play count)` an APNG's `acTL` chunk declares.
+    fn actl(png: &[u8]) -> (u32, u32) {
+        let mut at = 8;
+        while at + 8 <= png.len() {
+            let len = u32::from_be_bytes(png[at..at + 4].try_into().expect("length")) as usize;
+            if &png[at + 4..at + 8] == b"acTL" {
+                let body = &png[at + 8..at + 8 + len];
+                return (
+                    u32::from_be_bytes(body[..4].try_into().expect("frames")),
+                    u32::from_be_bytes(body[4..8].try_into().expect("plays")),
+                );
+            }
+            at += 12 + len;
+        }
+        panic!("no acTL chunk");
     }
 }
