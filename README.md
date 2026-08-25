@@ -3,14 +3,18 @@
 Sidebar for managing tmux sessions — with first-class Claude Code and GitHub Copilot CLI integration, plus git and Chrome.
 
 <p align="center">
-  <img src="docs/images/window.png" alt="The tmux-tabs sidebar pinned to the left of a tmux window" width="900">
+  <img src="docs/images/window.png" alt="The tmux-tabs sidebar pinned to the left of a Copilot CLI pane, tracking what the agent is doing" width="900">
 </p>
 
 ## Features
 
-### Every session on one card
+### All AI sessions in a sidebar
 
-<img src="docs/images/cards.png" alt="A session card updating as agents work: the context fills, a session stops to ask permission, and a draft PR opens" width="220" align="right">
+<p align="center">
+  <img src="docs/images/cards.png" alt="A session card updating as agents work: the context fills, a session stops to ask permission, and a draft PR opens" width="260">
+</p>
+
+One card per tmux session, each showing:
 
 - **Name**, prefixed with its `prefix + g` index — the current session is bold green, and context-window usage sits on the right
 - **Git branch** plus a PR badge coloured by state: open / draft / merged / closed
@@ -22,33 +26,24 @@ Cards are driven by hooks, so Claude Code and Copilot CLI panes report the same
 way: you can see at a glance which session is blocked on you and which is still
 grinding.
 
-<br clear="right">
-
-### Switch, rename, reconnect
-
-<img src="docs/images/rename.png" alt="Pressing r opens the rename prompt, the name is edited a keystroke at a time, and Enter commits it" width="220" align="right">
-
-`j`/`k` move the selection, `Enter` switches, `r` renames in place, and the
-footer turns orange if the daemon goes away so stale cards are never mistaken
-for live ones.
-
-<br clear="right">
-
-<img src="docs/images/switch.png" alt="The mouse wheel steps the current session down the sidebar, then a click jumps straight back to the top card" width="220" align="right">
-
-The sidebar is mouse-driven too: rolling the wheel over it steps through
-sessions one at a time, and a click switches straight to the card under the
-pointer — no keyboard round trip when you already have a hand on the mouse.
-
-<br clear="right">
+### Quick switch between sessions
 
 <p align="center">
-  <img src="docs/images/sidebar-states.png" alt="Selection, rename prompt, and the server-offline notice" width="760">
+  <img src="docs/images/switch.png" alt="The mouse wheel steps the current session down the sidebar, then a click jumps straight back to the top card" width="260">
 </p>
+
+The sidebar is mouse-driven: rolling the wheel over it steps through sessions
+one at a time, and a click switches straight to the card under the pointer — no
+keyboard round trip when you already have a hand on the mouse. From the
+keyboard, `prefix + g + 1..9` jumps to a session by index from anywhere, and
+`j`/`k` plus `Enter` work inside the sidebar pane. See
+[Usage](#usage) for the full list.
 
 ### Chrome tab groups follow your tmux session
 
-<img src="docs/images/chrome-popup.png" alt="The extension popup listing tab groups per tmux session" width="240" align="right">
+<p align="center">
+  <img src="docs/images/chrome-tab-groups.png" alt="Switching tmux sessions in the sidebar collapses every other Chrome tab group and expands the attached session's one, and the reverse works too" width="900">
+</p>
 
 Each tmux session gets a matching Chrome tab group. Switching sessions collapses
 every other group; expanding a group in Chrome switches tmux to that session.
@@ -56,16 +51,14 @@ Closing a session closes its tabs, and `prefix + g + o` brings a group back.
 
 The extension popup lists the groups it is tracking and their tab counts.
 
-<br clear="right">
-
 <p align="center">
-  <img src="docs/images/chrome-tab-groups.png" alt="The Chrome tab strip following the tmux session: one grey group per session, with only the attached session's group expanded" width="880">
+  <img src="docs/images/chrome-popup.png" alt="The extension popup listing tab groups per tmux session" width="240">
 </p>
 
 ### Send web content to the AI pane
 
 <p align="center">
-  <img src="docs/images/chrome-send-to-ai.png" alt="Selecting text, choosing Send selection to AI from the right-click menu, and the quoted selection arriving in the AI pane" width="700">
+  <img src="docs/images/chrome-send-to-ai.png" alt="Selecting text, choosing Send selection to AI from the right-click menu, and the quoted selection arriving in the Copilot CLI pane" width="900">
 </p>
 
 Right-click any page with the extension installed to get **Send selection to
@@ -76,7 +69,7 @@ without a copy-paste round trip.
 ### Pull a pane into the conversation
 
 <p align="center">
-  <img src="docs/images/grab.png" alt="Typing /grab into a Copilot CLI pane, which then reads the failing test from the pane next door and explains it" width="900">
+  <img src="docs/images/grab.png" alt="Typing a /grab prompt into a Copilot CLI pane, which then reads the failing test from the pane next door and explains it" width="900">
 </p>
 
 `/grab` hands a neighbouring pane's output to your AI agent as context — no
@@ -129,6 +122,10 @@ bind-key -T tabs_mode o run-shell "tmux-tabs open-tabs --session '#S'"
 ```
 
 Reload tmux (`prefix + :source-file ~/.tmux.conf`) and start a new session — the sidebar should appear on the left.
+
+<p align="center">
+  <img src="docs/images/tmux-setup.png" alt="Running tmux new -s api-gateway in a shell: the session-created hook splits the sidebar in, and the card starts tracking the agent started in the pane next to it" width="760">
+</p>
 
 The `tmux-tabs-server` daemon starts on demand the first time the sidebar opens.
 
@@ -219,6 +216,21 @@ Inside the sidebar pane (when focused):
 - **`r`** → rename current/selected session
 - **`Esc`** → clear selection
 - **`q`** → close the sidebar
+
+`r` opens the rename prompt in place; the name is edited a keystroke at a time
+and `Enter` commits it.
+
+<p align="center">
+  <img src="docs/images/rename.png" alt="Pressing r opens the rename prompt, the name is edited a keystroke at a time, and Enter commits it" width="260">
+</p>
+
+The footer tracks what the sidebar is doing: the keybind hints while you browse,
+the prompt while you rename, and an orange notice if the daemon goes away, so
+stale cards are never mistaken for live ones.
+
+<p align="center">
+  <img src="docs/images/sidebar-states.png" alt="Selection, rename prompt, and the server-offline notice" width="760">
+</p>
 
 ## License
 

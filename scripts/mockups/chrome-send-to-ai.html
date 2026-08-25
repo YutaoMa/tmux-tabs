@@ -9,9 +9,11 @@
   selected. The generic puzzle-piece icon is what Chrome shows for an extension
   that declares no icons, as this one does.
 
-  The AI pane below the page quotes the prompt
-  server::socket::handle_send_to_pane actually types, for a selection short
-  enough to go inline: "From {title}\n{url}:\n---\n{text}\n---".
+  The AI pane on the right is not drawn here: it is an SVG the screenshot
+  generator renders from the real terminal painter (parts/send-to-ai-*.svg). It
+  quotes the prompt server::socket::handle_send_to_pane actually types, for a
+  selection short enough to go inline:
+  "From {title}\n{url}:\n---\n{text}\n---".
 
   Stages are driven by the URL hash: #0 clean page, #1 selection, #2 menu, #3
   item highlighted, #4 delivered. gen-screenshots.sh renders one frame each and
@@ -25,8 +27,8 @@
 
     body {
       margin: 0;
-      width: 700px;
-      height: 540px;
+      width: 1240px;
+      height: 408px;
       font-family: system-ui, -apple-system, "SF Pro Text", sans-serif;
       -webkit-font-smoothing: antialiased;
       background: transparent;
@@ -36,6 +38,7 @@
     .backdrop {
       width: 100%;
       height: 100%;
+      padding: 24px;
       border-radius: 12px;
       background: #202124;
       display: flex;
@@ -44,7 +47,17 @@
     }
 
     /* The menu lives outside .page so the card's rounded clip can't cut it. */
-    .stage { position: relative; width: 640px; height: 480px; }
+    .stage { position: relative; width: 560px; height: 360px; flex: none; }
+
+    /* Selection leaves the page and lands in the pane, one way. */
+    .link {
+      width: 100px;
+      flex: none;
+      display: flex;
+      justify-content: center;
+      color: #9AA0A6;
+    }
+    .link svg { width: 76px; height: 16px; }
 
     .page {
       width: 100%;
@@ -120,23 +133,7 @@
     .icon { width: 14px; height: 14px; flex: none; }
 
     /* The AI pane in the tmux session the selection is routed to. */
-    .pane {
-      height: 108px;
-      margin-top: 12px;
-      padding: 10px 13px;
-      border-radius: 8px;
-      background: #181b21;
-      border: 1px solid #333a45;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 11.5px;
-      line-height: 1.62;
-      color: #d7dbe2;
-      white-space: pre;
-      overflow: hidden;
-    }
-    .pane .caret { color: #7ee787; }
-    .pane .rule { color: #6a7280; }
-    .pane .sent { color: #9ecbff; }
+    .pane { width: 532px; height: 274px; flex: none; }
 
     /* Stages, selected by the URL hash. The still shows the end state. */
     body[data-stage="0"] mark { background: transparent; }
@@ -144,7 +141,6 @@
     body[data-stage="1"] .menu,
     body[data-stage="4"] .menu { display: none; }
     body[data-stage="2"] .item.on { background: transparent; color: inherit; }
-    body:not([data-stage="4"]) .pane .prompt { visibility: hidden; }
   </style>
 </head>
 <body>
@@ -190,17 +186,31 @@
       <div class="item"><span class="label">Inspect</span></div>
     </div>
 
-    <div class="pane"><span class="caret">&rsaquo;</span> <span class="prompt"><span class="sent">From Token bucket &mdash; docs.rs
-https://docs.rs/governor/latest/rate-limiting:
-<span class="rule">---</span>
-refill must saturate at capacity
-<span class="rule">---</span></span></span></div>
   </div>
+
+  <div class="link">
+    <svg viewBox="0 0 76 16" fill="none" aria-hidden="true">
+      <defs>
+        <marker id="head" markerWidth="6" markerHeight="6" refX="5.2" refY="3"
+                orient="auto" markerUnits="strokeWidth">
+          <path d="M0 0 L6 3 L0 6 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <line x1="2" y1="8" x2="69" y2="8" stroke="currentColor" stroke-width="2"
+            marker-end="url(#head)"/>
+    </svg>
+  </div>
+
+  <img class="pane" alt="">
   </div>
 
   <script>
     // #0 clean page, #1 selection, #2 menu, #3 item highlighted, #4 delivered.
-    document.body.dataset.stage = location.hash.slice(1) || "4";
+    const stage = location.hash.slice(1) || "4";
+    document.body.dataset.stage = stage;
+    // Rendered next to the mock-up by gen-screenshots.sh.
+    document.querySelector(".pane").src =
+      stage === "4" ? "send-to-ai-sent.svg" : "send-to-ai-idle.svg";
   </script>
 </body>
 </html>

@@ -97,6 +97,13 @@ html_anim() {
 mkdir -p "$OUT"
 generator __screenshot "$WORK"
 
+# The generator also writes inset windows (the sidebar, the AI pane) into
+# $WORK/parts. The HTML mock-ups embed those by relative path, so they have to
+# be rendered from that directory too. Neither loop below picks the insets up:
+# the stills loop only globs the top level, and parts/ has no 000.svg.
+MOCKUPS="$WORK/parts"
+cp "$ROOT"/scripts/mockups/*.html "$MOCKUPS/"
+
 for svg in "$WORK"/*.svg; do
     read -r w h < <(svg_size "$svg")
     shot "$(basename "$svg" .svg)" "$w" "$h" "file://$svg"
@@ -143,10 +150,11 @@ shot chrome-popup 264 152 "file://$POPUP/popup.html"
 # Chrome ignores --load-extension on current builds, so the tab strip and the
 # right-click menu cannot be captured from a real browser. Those two are
 # hand-built HTML illustrations; each file's header records what it keeps
-# faithful to the extension. Both are animated by stepping the stage named in
-# the URL fragment.
-html_anim chrome-tab-groups 880 98 "$ROOT/scripts/mockups/chrome-tab-groups.html" \
+# faithful to the extension. The sidebar and the AI pane inside them are not
+# hand-built: they are insets rendered from the real UI code. Both are animated
+# by stepping the stage named in the URL fragment.
+html_anim chrome-tab-groups 1100 466 "$MOCKUPS/chrome-tab-groups.html" \
     tmux-tabs:1500 api-gateway:1700 tonic:2600
 
-html_anim chrome-send-to-ai 700 540 "$ROOT/scripts/mockups/chrome-send-to-ai.html" \
+html_anim chrome-send-to-ai 1240 408 "$MOCKUPS/chrome-send-to-ai.html" \
     0:900 1:750 2:700 3:950 4:2600

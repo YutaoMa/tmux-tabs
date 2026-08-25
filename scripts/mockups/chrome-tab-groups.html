@@ -1,15 +1,19 @@
 <!DOCTYPE html>
 <!--
-  Illustration of the Chrome tab strip while tmux-tabs is driving it.
+  Illustration of the sidebar and the Chrome tab strip staying in sync.
 
   Chrome ignores --load-extension on recent builds, so the real tab strip can't
   be captured headlessly. This mock-up mirrors what background.js actually does:
   one group per tmux session, always created with color "grey", the current
   session's group expanded and every other group collapsed.
 
-  The strip is rebuilt from SESSIONS for the session named in the URL hash
-  (e.g. #tonic), so gen-screenshots.sh can render one frame per switch and
-  stitch them into an animation. With no hash it renders the still.
+  The sidebar on the left is not drawn here: it is an SVG the screenshot
+  generator renders from the real widgets (parts/sidebar-<session>.svg), so both
+  halves of the picture always agree with the code.
+
+  The scene is rebuilt for the session named in the URL hash (e.g. #tonic), so
+  gen-screenshots.sh can render one frame per switch and stitch them into an
+  animation. With no hash it renders the still.
 -->
 <html>
 <head>
@@ -30,12 +34,38 @@
 
     body {
       margin: 0;
-      width: 880px;
+      width: 1100px;
       font-family: system-ui, -apple-system, "SF Pro Text", sans-serif;
       -webkit-font-smoothing: antialiased;
     }
 
+    .scene {
+      display: flex;
+      align-items: center;
+      padding: 16px;
+    }
+
+    .sidebar { width: 244px; height: 434px; flex: none; }
+
+    /* The double-headed arrow that ties the two windows together. */
+    .link {
+      width: 104px;
+      flex: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 7px;
+      color: var(--text-dim);
+    }
+    .link svg { width: 84px; height: 16px; }
+    .link span {
+      font-size: 13px;
+      letter-spacing: .04em;
+    }
+
     .window {
+      width: 720px;
+      flex: none;
       background: var(--frame);
       border-radius: 10px;
       overflow: hidden;
@@ -88,7 +118,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      width: 190px;
+      width: 152px;
       height: 32px;
       padding: 0 12px;
       border-radius: 8px;
@@ -149,33 +179,86 @@
       color: rgba(232, 234, 237, 0.7);
     }
     .lock { width: 13px; height: 13px; flex: none; opacity: .8; }
+
+    /* Stand-in for the page itself: the tab title, then blocked-out text. */
+    .page {
+      height: 214px;
+      padding: 22px 26px;
+      background: #FFFFFF;
+    }
+    .page h1 {
+      margin: 0 0 20px;
+      color: #202124;
+      font-size: 17px;
+      font-weight: 600;
+    }
+    .page i {
+      display: block;
+      height: 10px;
+      margin-bottom: 12px;
+      border-radius: 5px;
+      background: #E8EAED;
+    }
+    .page .code {
+      height: 74px;
+      margin-top: 20px;
+      border-radius: 8px;
+      background: #F1F3F4;
+    }
   </style>
 </head>
 <body>
-  <div class="window">
-    <div class="strip">
-      <div class="lights"><i></i><i></i><i></i></div>
-      <div class="groups"></div>
-      <div class="plus">+</div>
+  <div class="scene">
+    <img class="sidebar" alt="">
+
+    <div class="link">
+      <svg viewBox="0 0 84 16" fill="none" aria-hidden="true">
+        <defs>
+          <marker id="head" markerWidth="6" markerHeight="6" refX="5.2" refY="3"
+                  orient="auto-start-reverse" markerUnits="strokeWidth">
+            <path d="M0 0 L6 3 L0 6 z" fill="currentColor"/>
+          </marker>
+        </defs>
+        <line x1="7" y1="8" x2="77" y2="8" stroke="currentColor" stroke-width="2"
+              marker-start="url(#head)" marker-end="url(#head)"/>
+      </svg>
+      <span>in sync</span>
     </div>
 
-    <div class="toolbar">
-      <div class="nav"><span>&#8592;</span><span>&#8594;</span><span>&#10227;</span></div>
-      <div class="omnibox">
-        <svg class="lock" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM9 8V6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9z"/>
-        </svg>
-        <span class="url"></span>
+    <div class="window">
+      <div class="strip">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <div class="groups"></div>
+        <div class="plus">+</div>
       </div>
-      <svg class="ext" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        <path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7s2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z"/>
-      </svg>
+
+      <div class="toolbar">
+        <div class="nav"><span>&#8592;</span><span>&#8594;</span><span>&#10227;</span></div>
+        <div class="omnibox">
+          <svg class="lock" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM9 8V6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9z"/>
+          </svg>
+          <span class="url"></span>
+        </div>
+        <svg class="ext" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7s2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z"/>
+        </svg>
+      </div>
+
+      <div class="page">
+        <h1></h1>
+        <i style="width: 86%"></i>
+        <i style="width: 94%"></i>
+        <i style="width: 62%"></i>
+        <div class="code"></div>
+      </div>
     </div>
   </div>
 
   <script>
     // One entry per tmux session, in tab-strip order. Each session's group
-    // holds the tabs that were opened while working in it.
+    // holds the tabs that were opened while working in it. Kept in step with
+    // BROWSER_SESSIONS in crates/client/src/screenshot.rs.
     const SESSIONS = [
       {
         name: "api-gateway",
@@ -241,6 +324,9 @@
         current.host,
         Object.assign(document.createElement("b"), { textContent: current.path }),
       );
+      document.querySelector(".page h1").textContent = current.tabs[0].title;
+      // Rendered next to the mock-up by gen-screenshots.sh.
+      document.querySelector(".sidebar").src = `sidebar-${current.name}.svg`;
     }
 
     render(decodeURIComponent(location.hash.slice(1)));
