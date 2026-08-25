@@ -63,13 +63,15 @@ const TITLE_FG: &str = "#8b93a1";
 pub fn run(out_dir: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(out_dir)?;
 
-    // Hero: the sidebar alongside a real captured tmux pane.
+    // Hero: the sidebar next to the Copilot CLI pane it is reporting on — the
+    // attached card's spinner and `Bash: cargo test` are the tool call the
+    // pane is running.
     write_svg(
         out_dir,
         "window.svg",
         &window_svg(
             &render(&overview_app(), SIDEBAR_COLS, 28)?,
-            &parse_ansi(DEMO_PANE, 76, 28),
+            &parse_ansi(COPILOT_PANE, 76, 28),
             "tmux — ~/dev/tmux-tabs",
         ),
     )?;
@@ -117,6 +119,41 @@ pub fn run(out_dir: &Path) -> anyhow::Result<()> {
         &switch_frames()?,
         &Stage::Window(Some("tmux-tabs")),
     )?;
+
+    // The tmux hook at work: a session is created and the sidebar splits in.
+    write_animation(
+        out_dir,
+        "tmux-setup",
+        &setup_frames()?,
+        &Stage::Window(Some(SETUP_CWD)),
+    )?;
+
+    // Inset windows for the HTML mock-ups, which embed them as <img> so the
+    // browser illustrations show the real sidebar rather than a copy of it.
+    // They live in a subdirectory so the script doesn't publish them as
+    // screenshots of their own.
+    let parts = out_dir.join("parts");
+    std::fs::create_dir_all(&parts)?;
+    for name in BROWSER_SESSIONS.map(|(name, _, _)| name) {
+        write_svg(
+            &parts,
+            &format!("sidebar-{name}.svg"),
+            &to_svg(
+                &render(&browser_app(name), SIDEBAR_COLS, BROWSER_ROWS)?,
+                Some(name),
+            ),
+        )?;
+    }
+    for (name, delivered) in [("idle", false), ("sent", true)] {
+        write_svg(
+            &parts,
+            &format!("send-to-ai-{name}.svg"),
+            &to_svg(
+                &send_to_ai_pane(delivered),
+                Some("tmux — ~/dev/api-gateway"),
+            ),
+        )?;
+    }
 
     Ok(())
 }
@@ -206,9 +243,9 @@ fn overview_app() -> App {
                 attached: true,
                 branch: Some("main"),
                 tabs: Some(2),
-                topic: Some("sidebar screenshots"),
+                topic: Some("sidebar spinner tick"),
                 context_pct: Some(61),
-                agent: waiting("Run cargo test?"),
+                agent: processing("Bash: cargo test"),
                 ..Card::default()
             }
             .build(),
@@ -217,6 +254,7 @@ fn overview_app() -> App {
                 branch: Some("fix/nav-overflow"),
                 pr: Some((91, PrState::Draft)),
                 topic: Some("mobile nav clipping"),
+                agent: waiting("Apply patch?"),
                 ..Card::default()
             }
             .build(),
@@ -227,7 +265,7 @@ fn overview_app() -> App {
                 tabs: Some(3),
                 topic: Some("backport route filters"),
                 context_pct: Some(12),
-                agent: processing("Bash: cargo test"),
+                agent: processing("Bash: cargo bench"),
                 ..Card::default()
             }
             .build(),
@@ -270,6 +308,97 @@ fn compact_app() -> App {
     app
 }
 
+/// The sessions the Chrome mock-up keeps tab groups for, as
+/// (name, branch, topic). Kept in step with `SESSIONS` in
+/// `scripts/mockups/chrome-tab-groups.html`.
+const BROWSER_SESSIONS: [(&str, &str, &str); 3] = [
+    ("api-gateway", "feat/rate-limiting", "token bucket limiter"),
+    ("tmux-tabs", "main", "sidebar spinner tick"),
+    ("tonic", "xds-routing", "backport route filters"),
+];
+
+/// Rows of the sidebar inset the Chrome mock-up embeds.
+const BROWSER_ROWS: u16 = 19;
+
+/// The sidebar as it looks while `current` is attached, for the shot that
+/// pairs it with the Chrome tab strip. Every session has the two tabs its
+/// group holds in the mock-up.
+fn browser_app(current: &str) -> App {
+    App {
+        sessions: BROWSER_SESSIONS
+            .into_iter()
+            .map(|(name, branch, topic)| {
+                Card {
+                    name,
+                    attached: name == current,
+                    branch: Some(branch),
+                    tabs: Some(2),
+                    topic: Some(topic),
+                    ..Card::default()
+                }
+                .build()
+            })
+            .collect(),
+        current_session: current.to_string(),
+        selected: None,
+        mode: Mode::Normal,
+        running: true,
+        link: Link::Up,
+    }
+}
+
+/// The Copilot CLI pane a selection is delivered into, inset into the
+/// send-to-AI mock-up. The prompt text is the one
+/// `server::socket::handle_send_to_pane` types for a short selection.
+fn send_to_ai_pane(delivered: bool) -> Buffer {
+    const COLS: u16 = 56;
+    const ROWS: u16 = 11;
+
+    let quoted: &[&str] = if delivered {
+        &[
+            "From Token bucket — docs.rs",
+            "https://docs.rs/governor/latest/rate-limiting:",
+            "---",
+            "refill must saturate at capacity",
+            "---",
+        ]
+    } else {
+        &[]
+    };
+
+    let rule = "─".repeat(usize::from(COLS));
+    let mut rows = vec![
+        vec![
+            (" ●", Color::Magenta),
+            (" Welcome to GitHub Copilot CLI", Color::Reset),
+        ],
+        Vec::new(),
+        vec![(" ~/dev/api-gateway", Color::DarkGray)],
+        vec![(rule.as_str(), Color::Green)],
+    ];
+    for (i, line) in quoted.iter().enumerate() {
+        rows.push(vec![
+            (if i == 0 { " ❯ " } else { "   " }, Color::Green),
+            (line, Color::LightBlue),
+        ]);
+    }
+    if quoted.is_empty() {
+        rows.push(vec![(" ❯ ", Color::Green)]);
+    }
+    while rows.len() < usize::from(ROWS) - 2 {
+        rows.push(Vec::new());
+    }
+    rows.push(vec![(rule.as_str(), Color::Green)]);
+    rows.push(vec![
+        (" ←", Color::DarkGray),
+        (" open sidebar · autopilot · / commands", Color::DarkGray),
+    ]);
+
+    let caret_row = 4;
+    let cursor = (!delivered).then_some((3, caret_row));
+    text_pane(COLS, ROWS, &rows, cursor)
+}
+
 /// Rows used by the animated sidebar: enough for four cards and their
 /// dividers, cropped close so the cards fill the frame.
 const CARD_ROWS: u16 = 24;
@@ -279,6 +408,8 @@ struct Frame {
     buf: Buffer,
     delay_ms: u16,
     pointer: Option<Pointer>,
+    /// Column tmux's pane divider is drawn over, once the window is split.
+    divider: Option<u16>,
 }
 
 impl Frame {
@@ -287,6 +418,7 @@ impl Frame {
             buf,
             delay_ms,
             pointer: None,
+            divider: None,
         }
     }
 
@@ -295,7 +427,13 @@ impl Frame {
             buf,
             delay_ms,
             pointer: Some(pointer),
+            divider: None,
         }
+    }
+
+    fn split_at(mut self, col: u16) -> Self {
+        self.divider = Some(col);
+        self
     }
 }
 
@@ -380,6 +518,7 @@ struct Emitted {
 fn ambient_app() -> App {
     let mut app = overview_app();
     app.sessions[1].agent = AgentStatus::None;
+    app.sessions[2].agent = AgentStatus::None;
     app.sessions[3].agent = processing("Bash: cargo test");
     app
 }
@@ -555,8 +694,253 @@ fn switch_frames() -> anyhow::Result<Vec<Frame>> {
     Ok(frames)
 }
 
+/// A brand-new tmux session, wide enough for the sidebar plus a working pane.
+const SETUP_COLS: u16 = 81;
+const SETUP_ROWS: u16 = 16;
+/// The directory the setup animation runs in.
+const SETUP_CWD: &str = "~/dev/api-gateway";
+
+/// A styled run of text inside [`text_pane`].
+type Run<'a> = (&'a str, Color);
+
+/// Terminal text drawn straight into a buffer, for the panes that stand in for
+/// a shell rather than replaying a captured one.
+fn text_pane(width: u16, height: u16, rows: &[Vec<Run<'_>>], cursor: Option<(u16, u16)>) -> Buffer {
+    let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+    for (y, runs) in (0..height).zip(rows) {
+        let mut x = 0;
+        for (text, color) in runs {
+            for ch in text.chars() {
+                if x >= width {
+                    break;
+                }
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_char(ch).set_style(Style::default().fg(*color));
+                }
+                x += 1;
+            }
+        }
+    }
+    if let Some(at) = cursor
+        && let Some(cell) = buf.cell_mut(at)
+    {
+        cell.set_char(' ')
+            .set_style(Style::default().add_modifier(Modifier::REVERSED));
+    }
+    buf
+}
+
+/// What the working pane shows at each stage of the setup animation.
+enum SetupPane<'a> {
+    /// A shell with a little history, part-way through a command.
+    Shell(&'a str),
+    /// The same shell right after `tmux new`, so the screen starts clear.
+    Fresh(&'a str),
+    /// Copilot CLI, with a request typed and then sent.
+    Copilot { typed: &'a str, sent: bool },
+}
+
+/// The shell prompt line of the setup animation, with `typed` after it.
+fn setup_prompt(typed: &str) -> Vec<Run<'_>> {
+    vec![
+        (SETUP_CWD, Color::Green),
+        (" $ ", Color::Reset),
+        (typed, Color::Reset),
+    ]
+}
+
+fn setup_pane(stage: &SetupPane<'_>, width: u16) -> Buffer {
+    let caret = u16::try_from(SETUP_CWD.chars().count() + 3).unwrap_or(0);
+    let typed_cols = |typed: &str| u16::try_from(typed.chars().count()).unwrap_or(0);
+
+    match stage {
+        SetupPane::Shell(typed) => text_pane(
+            width,
+            SETUP_ROWS,
+            &[
+                setup_prompt("git switch feat/rate-limiting"),
+                vec![("Switched to branch 'feat/rate-limiting'", Color::Reset)],
+                setup_prompt(typed),
+            ],
+            Some((caret + typed_cols(typed), 2)),
+        ),
+        SetupPane::Fresh(typed) => text_pane(
+            width,
+            SETUP_ROWS,
+            &[setup_prompt(typed)],
+            Some((caret + typed_cols(typed), 0)),
+        ),
+        SetupPane::Copilot { typed, sent } => {
+            let mut rows = vec![
+                setup_prompt("copilot"),
+                Vec::new(),
+                vec![
+                    ("●", Color::Magenta),
+                    (" Welcome to GitHub Copilot CLI", Color::Reset),
+                ],
+                Vec::new(),
+                vec![("❯ ", Color::Green), (typed, Color::Reset)],
+            ];
+            if *sent {
+                rows.push(Vec::new());
+                rows.push(vec![
+                    ("⠹", Color::Green),
+                    (" Read tests/limiter.rs", Color::Reset),
+                ]);
+            }
+            let cursor = (!sent).then(|| (2 + typed_cols(typed), 4));
+            text_pane(width, SETUP_ROWS, &rows, cursor)
+        }
+    }
+}
+
+/// Copy `src` into `dst` with its left edge at `x0`.
+fn blit(dst: &mut Buffer, src: &Buffer, x0: u16) {
+    for y in 0..src.area.height.min(dst.area.height) {
+        for x in 0..src.area.width {
+            if let Some(cell) = src.cell((x, y))
+                && let Some(slot) = dst.cell_mut((x0 + x, y))
+            {
+                *slot = cell.clone();
+            }
+        }
+    }
+}
+
+/// The whole terminal window as one buffer: the working pane on its own, or
+/// the sidebar split off its left. The divider column is left blank because
+/// `write_animation` draws it as a hairline over the cells.
+fn tmux_window(sidebar: Option<&Buffer>, pane: &Buffer) -> Buffer {
+    let mut buf = Buffer::empty(Rect::new(0, 0, SETUP_COLS, SETUP_ROWS));
+    let Some(sidebar) = sidebar else {
+        blit(&mut buf, pane, 0);
+        return buf;
+    };
+    blit(&mut buf, sidebar, 0);
+    blit(&mut buf, pane, SIDEBAR_COLS + 1);
+    buf
+}
+
+/// The one card a freshly created session gets, with whatever the agent in it
+/// is up to.
+fn setup_app(topic: Option<&str>, agent: AgentStatus) -> App {
+    App {
+        sessions: vec![
+            Card {
+                name: "api-gateway",
+                attached: true,
+                branch: Some("feat/rate-limiting"),
+                pr: Some((482, PrState::Open)),
+                topic,
+                agent,
+                ..Card::default()
+            }
+            .build(),
+        ],
+        current_session: "api-gateway".to_string(),
+        selected: None,
+        mode: Mode::Normal,
+        running: true,
+        link: Link::Up,
+    }
+}
+
+/// Scene: a new tmux session is created from the shell and the `session-created`
+/// hook splits the sidebar in beside it, which then tracks the agent started
+/// in the pane.
+fn setup_frames() -> anyhow::Result<Vec<Frame>> {
+    const KEYPRESS: u16 = 125;
+    const SPLIT_COLS: u16 = SETUP_COLS - SIDEBAR_COLS - 1;
+
+    let mut frames = Vec::new();
+    let mut push = |pane: SetupPane<'_>,
+                    sidebar: Option<&App>,
+                    delay_ms: u16,
+                    spinner: usize|
+     -> anyhow::Result<()> {
+        let width = if sidebar.is_some() {
+            SPLIT_COLS
+        } else {
+            SETUP_COLS
+        };
+        let side = sidebar
+            .map(|app| render_frame(app, SIDEBAR_COLS, SETUP_ROWS, spinner))
+            .transpose()?;
+        let mut buf = tmux_window(side.as_ref(), &setup_pane(&pane, width));
+        set_spinner(&mut buf, spinner);
+        let frame = Frame::new(buf, delay_ms);
+        frames.push(if side.is_some() {
+            frame.split_at(SIDEBAR_COLS)
+        } else {
+            frame
+        });
+        Ok(())
+    };
+
+    // Act 1: the command that starts it all, typed in a plain shell.
+    let command = "tmux new -s api-gateway";
+    push(SetupPane::Shell(""), None, 900, 0)?;
+    for end in [5, 9, 12, 17, command.len()] {
+        push(SetupPane::Shell(&command[..end]), None, KEYPRESS, 0)?;
+    }
+    push(SetupPane::Shell(command), None, 420, 0)?;
+
+    // Act 2: tmux clears the screen, then the hook splits the sidebar in.
+    push(SetupPane::Fresh(""), None, 460, 0)?;
+    let fresh = setup_app(None, AgentStatus::None);
+    push(SetupPane::Fresh(""), Some(&fresh), 1700, 0)?;
+
+    // Act 3: an agent starts in the pane and the card starts tracking it.
+    for end in [3, "copilot".len()] {
+        push(
+            SetupPane::Fresh(&"copilot"[..end]),
+            Some(&fresh),
+            KEYPRESS,
+            0,
+        )?;
+    }
+    push(
+        SetupPane::Copilot {
+            typed: "",
+            sent: false,
+        },
+        Some(&fresh),
+        780,
+        0,
+    )?;
+
+    let request = "fix the refill test";
+    for end in [7, 11, request.len()] {
+        push(
+            SetupPane::Copilot {
+                typed: &request[..end],
+                sent: false,
+            },
+            Some(&fresh),
+            170,
+            0,
+        )?;
+    }
+
+    let working = setup_app(Some(request), processing("Read: limiter.rs"));
+    for (i, delay) in [280, 280, 2600].into_iter().enumerate() {
+        push(
+            SetupPane::Copilot {
+                typed: request,
+                sent: true,
+            },
+            Some(&working),
+            delay,
+            i,
+        )?;
+    }
+
+    Ok(frames)
+}
+
 /// The transcript viewport of the Copilot pane in the `/grab` fixture.
 const GRAB_TRANSCRIPT: RangeInclusive<u16> = 2..=19;
+
 /// The fixture's prompt line, and the column its text starts at.
 const GRAB_PROMPT_ROW: u16 = 22;
 const GRAB_PROMPT_COL: u16 = 2;
@@ -598,13 +982,23 @@ fn grab_pane(revealed: Option<u16>, typed: &str) -> Buffer {
 /// Scene: a test fails in one pane, and `/grab` hands it to the agent next
 /// door without anyone copying a line of it.
 fn grab_frames() -> Vec<Frame> {
-    const KEYPRESS: u16 = 145;
+    const KEYPRESS: u16 = 130;
+    const WORD: u16 = 175;
 
     let mut frames = vec![Frame::new(grab_pane(None, ""), 900)];
 
+    // The slash command is typed a letter at a time because it is the part
+    // worth reading; the rest of the sentence arrives a word at a time so a
+    // full prompt doesn't cost forty frames.
     let command = "/grab";
     for end in 1..=command.len() {
         frames.push(Frame::new(grab_pane(None, &command[..end]), KEYPRESS));
+    }
+    let mut typed = command.to_string();
+    for word in "left pane and tell me how to fix the error".split_whitespace() {
+        typed.push(' ');
+        typed.push_str(word);
+        frames.push(Frame::new(grab_pane(None, &typed), WORD));
     }
     if let Some(last) = frames.last_mut() {
         last.delay_ms = 700;
@@ -612,7 +1006,7 @@ fn grab_frames() -> Vec<Frame> {
 
     // Enter: the prompt clears and the answer arrives a block at a time. The
     // last step fills the viewport, matching the fixture exactly.
-    for (revealed, delay) in [(4, 620), (7, 780), (12, 900), (19, 2600)] {
+    for (revealed, delay) in [(4, 560), (7, 700), (12, 820), (19, 2600)] {
         frames.push(Frame::new(grab_pane(Some(revealed), ""), delay));
     }
 
@@ -636,15 +1030,33 @@ fn write_animation(
     let mut emitted: Vec<Emitted> = Vec::new();
 
     for (i, frame) in frames.iter().enumerate() {
+        let rows = frame.buf.area.height;
         let (svg, x, y) = if i == 0 {
             (
-                with_pointer(stage.canvas(&frame.buf), frame.pointer, ox, oy),
+                with_divider(
+                    with_pointer(stage.canvas(&frame.buf), frame.pointer, ox, oy),
+                    frame.divider,
+                    ox,
+                    oy,
+                    rows,
+                ),
                 0.0,
                 0.0,
             )
         } else if let Some(rect) = changed_rect(&frames[i - 1], frame) {
+            // The divider only needs repainting when this frame's rectangle
+            // covers the column it sits on.
+            let divider = frame
+                .divider
+                .filter(|col| (rect.x..rect.x + rect.width).contains(col));
             (
-                sub_svg(&frame.buf, rect, frame.pointer),
+                with_divider(
+                    sub_svg(&frame.buf, rect, frame.pointer),
+                    divider,
+                    -f32::from(rect.x) * CELL_W,
+                    -f32::from(rect.y) * CELL_H,
+                    rows,
+                ),
                 ox + f32::from(rect.x) * CELL_W,
                 oy + f32::from(rect.y) * CELL_H,
             )
@@ -680,7 +1092,8 @@ fn write_animation(
 }
 
 /// Everything that has to be repainted between two frames: the cells that
-/// differ, plus the pointer's old and new positions when it moved.
+/// differ, plus the pointer's old and new positions when it moved and the
+/// divider column when the window splits.
 fn changed_rect(prev: &Frame, next: &Frame) -> Option<Rect> {
     let mut rect = dirty_rect(&prev.buf, &next.buf);
     if prev.pointer != next.pointer {
@@ -688,6 +1101,12 @@ fn changed_rect(prev: &Frame, next: &Frame) -> Option<Rect> {
             let moved = pointer.rect(next.buf.area);
             rect = Some(rect.map_or(moved, |acc| acc.union(moved)));
         }
+    }
+    if prev.divider != next.divider
+        && let Some(col) = prev.divider.or(next.divider)
+    {
+        let line = Rect::new(col, 0, 1, next.buf.area.height);
+        rect = Some(rect.map_or(line, |acc| acc.union(line)));
     }
     rect
 }
@@ -760,6 +1179,25 @@ fn with_pointer(svg: String, pointer: Option<Pointer>, ox: f32, oy: f32) -> Stri
     out
 }
 
+/// Draw tmux's pane divider down `col`, the same hairline `window_svg` puts
+/// between two panes. Drawn over the cells rather than in them because a box
+/// glyph leaves a gap wherever a row's line box is shorter than the cell.
+fn with_divider(svg: String, col: Option<u16>, ox: f32, oy: f32, rows: u16) -> String {
+    let (Some(col), Some(body)) = (col, svg.strip_suffix("</svg>\n")) else {
+        return svg;
+    };
+    let mut out = String::with_capacity(svg.len() + 128);
+    out.push_str(body);
+    let _ = writeln!(
+        &mut out,
+        r#"<line x1="{x:.1}" y1="{oy:.1}" x2="{x:.1}" y2="{y2:.1}" stroke="{BORDER}" stroke-width="1"/>"#,
+        x = ox + (f32::from(col) + 0.5) * CELL_W,
+        y2 = oy + f32::from(rows) * CELL_H,
+    );
+    out.push_str("</svg>\n");
+    out
+}
+
 /// A macOS-style arrow whose tip sits on the pointer's cell, plus an
 /// indicator for whatever gesture is under way.
 fn draw_pointer(out: &mut String, pointer: Pointer, ox: f32, oy: f32) {
@@ -822,9 +1260,11 @@ fn set_spinner(buf: &mut Buffer, frame: usize) {
     }
 }
 
-/// A real `tmux capture-pane -e` dump, used as the right-hand pane of the
-/// full-window shot so the surrounding terminal content isn't fabricated.
-const DEMO_PANE: &str = include_str!("../fixtures/demo-pane.ansi");
+/// A Copilot CLI pane part-way through a turn, used as the right-hand pane of
+/// the hero shot. Unlike the `/grab` fixtures next to it this one is written by
+/// hand rather than captured, so the pane and the sidebar beside it can be made
+/// to tell the same story; it keeps Copilot CLI's real layout and colours.
+const COPILOT_PANE: &str = include_str!("../fixtures/copilot-pane.ansi");
 
 /// The two panes of the `/grab` shot: a failing test run, and the pane next
 /// door that pulled it in with `tmux-tabs capture`.
