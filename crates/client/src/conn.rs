@@ -264,6 +264,7 @@ mod tests {
                 context_pct: None,
                 git: tmux_tabs_common::GitInfo::default(),
                 browser: None,
+                blocker: None,
             }],
             current_session: "main".into(),
         }

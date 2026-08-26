@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tmux_tabs_common::{
@@ -32,6 +32,10 @@ struct State {
     /// server resolve panes (e.g. on client register or hook event) without
     /// spawning a tmux subprocess on the hot path.
     pane_sessions: HashMap<String, String>,
+    /// `session_name` → external-blocker note, set only from the sidebar.
+    /// Deliberately in-memory: a blocker is a reminder for the current
+    /// sitting, so it dies with the daemon rather than resurfacing stale.
+    blockers: HashMap<String, String>,
     /// Per-Copilot-session tail-task handles, keyed by the Copilot CLI's
     /// own `sessionId`. Value carries the owning tmux pane so we can abort
     /// stale tasks when a pane dies. Aborting a finished task is a no-op,
@@ -57,6 +61,7 @@ impl AppState {
                 clients: HashMap::new(),
                 bridge: None,
                 pane_sessions: HashMap::new(),
+                blockers: HashMap::new(),
                 copilot_tasks: HashMap::new(),
             })),
             notify: Arc::new(Notify::new()),
@@ -69,9 +74,35 @@ impl AppState {
         if state.sessions == sessions {
             return false;
         }
+        // Drop blockers for sessions that no longer exist, so a killed and
+        // later re-created session name doesn't inherit a stale note.
+        if !state.blockers.is_empty() {
+            let live: HashSet<&str> = sessions.iter().map(|s| s.name.as_str()).collect();
+            state
+                .blockers
+                .retain(|name, _| live.contains(name.as_str()));
+        }
         state.sessions = sessions;
         self.notify.notify_waiters();
         true
+    }
+
+    /// Set or clear a session's external-blocker note. Returns true if the
+    /// stored value changed.
+    pub async fn set_blocker(&self, session_name: &str, note: Option<String>) -> bool {
+        let mut state = self.state.write().await;
+        let changed = match note {
+            Some(note) if state.blockers.get(session_name) == Some(&note) => false,
+            Some(note) => {
+                state.blockers.insert(session_name.to_string(), note);
+                true
+            }
+            None => state.blockers.remove(session_name).is_some(),
+        };
+        if changed {
+            self.notify.notify_waiters();
+        }
+        changed
     }
 
     pub async fn register_client(
@@ -317,6 +348,7 @@ impl AppState {
                 agent: state.agent.status(&s.name),
                 topic: state.agent.topic(&s.name).map(String::from),
                 context_pct: state.agent.context_pct(&s.name),
+                blocker: state.blockers.get(&s.name).cloned(),
                 git: state.git.info(&s.name),
                 browser: state.browser.info(&s.name),
             })
@@ -409,5 +441,64 @@ mod tests {
     fn active_session_is_none_when_nothing_is_attached() {
         let sessions = vec![session("alpha", false, 300)];
         assert!(active_session(&sessions).is_none());
+    }
+
+    async fn blockers_of(app: &AppState) -> Vec<(String, String)> {
+        let mut v: Vec<_> = app
+            .state
+            .read()
+            .await
+            .blockers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[tokio::test]
+    async fn set_blocker_marks_and_clears() {
+        let app = AppState::new();
+        assert!(app.set_blocker("alpha", Some("ask jane".into())).await);
+        assert_eq!(
+            blockers_of(&app).await,
+            vec![("alpha".to_string(), "ask jane".to_string())]
+        );
+
+        assert!(app.set_blocker("alpha", None).await);
+        assert!(blockers_of(&app).await.is_empty());
+    }
+
+    /// Re-marking with the same note shouldn't churn a redraw through every
+    /// connected sidebar.
+    #[tokio::test]
+    async fn set_blocker_reports_no_change_for_a_repeat() {
+        let app = AppState::new();
+        app.set_blocker("alpha", Some("ask jane".into())).await;
+        assert!(!app.set_blocker("alpha", Some("ask jane".into())).await);
+        assert!(app.set_blocker("alpha", Some("ask bob".into())).await);
+    }
+
+    #[tokio::test]
+    async fn clearing_an_unblocked_session_is_a_no_op() {
+        let app = AppState::new();
+        assert!(!app.set_blocker("alpha", None).await);
+    }
+
+    /// tmux reuses session names, so a note left on a killed session would
+    /// otherwise reappear on an unrelated one created later.
+    #[tokio::test]
+    async fn blockers_do_not_outlive_their_session() {
+        let app = AppState::new();
+        app.update_sessions(vec![session("alpha", true, 1), session("beta", false, 1)])
+            .await;
+        app.set_blocker("alpha", Some("ask jane".into())).await;
+        app.set_blocker("beta", Some("ask bob".into())).await;
+
+        app.update_sessions(vec![session("beta", true, 2)]).await;
+        assert_eq!(
+            blockers_of(&app).await,
+            vec![("beta".to_string(), "ask bob".to_string())]
+        );
     }
 }
