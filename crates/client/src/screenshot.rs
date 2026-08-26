@@ -187,6 +187,7 @@ struct Card<'a> {
     topic: Option<&'a str>,
     context_pct: Option<u8>,
     agent: AgentStatus,
+    blocker: Option<&'a str>,
 }
 
 impl Card<'_> {
@@ -205,6 +206,7 @@ impl Card<'_> {
                 tab_count,
                 collapsed: false,
             }),
+            blocker: self.blocker.map(str::to_string),
         }
     }
 }
@@ -275,6 +277,7 @@ fn overview_app() -> App {
         mode: Mode::Normal,
         running: true,
         link: Link::Up,
+        ..App::new()
     }
 }
 
@@ -344,6 +347,7 @@ fn browser_app(current: &str) -> App {
         mode: Mode::Normal,
         running: true,
         link: Link::Up,
+        ..App::new()
     }
 }
 
@@ -842,6 +846,7 @@ fn setup_app(topic: Option<&str>, agent: AgentStatus) -> App {
         mode: Mode::Normal,
         running: true,
         link: Link::Up,
+        ..App::new()
     }
 }
 

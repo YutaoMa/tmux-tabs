@@ -14,6 +14,7 @@ use crate::ui;
 pub enum Mode {
     Normal,
     Rename { session_name: String, input: String },
+    Blocker { session_name: String, input: String },
 }
 
 /// State of the link to the server.
@@ -33,6 +34,10 @@ pub struct App {
     pub running: bool,
     /// Whether the server link is up.
     pub link: Link,
+    /// Last known pane width, refreshed each frame. Mouse hit-testing needs it
+    /// to locate right-aligned affordances, and it can't be read inside the
+    /// draw closure.
+    pub width: u16,
 }
 
 impl App {
@@ -44,6 +49,7 @@ impl App {
             mode: Mode::Normal,
             running: true,
             link: Link::Connecting,
+            width: 0,
         }
     }
 
@@ -74,6 +80,27 @@ impl App {
     pub fn selected_session_name(&self) -> Option<String> {
         self.selected
             .and_then(|i| self.sessions.get(i).map(|e| e.session.name.clone()))
+    }
+
+    /// Session that keyed actions (rename, block) apply to: the highlighted
+    /// one if the user has navigated, otherwise the one they're sitting in.
+    pub fn target_session_name(&self) -> Option<String> {
+        let name = self
+            .selected_session_name()
+            .unwrap_or_else(|| self.current_session.clone());
+        (!name.is_empty()).then_some(name)
+    }
+
+    pub fn blocker_of(&self, session_name: &str) -> Option<&str> {
+        self.sessions
+            .iter()
+            .find(|e| e.session.name == session_name)
+            .and_then(|e| e.blocker.as_deref())
+    }
+
+    pub fn target_session_is_blocked(&self) -> bool {
+        self.target_session_name()
+            .is_some_and(|n| self.blocker_of(&n).is_some())
     }
 
     fn current_session_index(&self) -> Option<usize> {
@@ -128,6 +155,7 @@ pub async fn run(
     let mut event_stream = EventStream::new();
 
     while app.running {
+        app.width = terminal.size()?.width;
         terminal.draw(|f| ui::render(f, &app))?;
 
         // While any agent is processing, the spinner must keep animating even

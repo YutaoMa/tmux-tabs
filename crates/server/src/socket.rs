@@ -257,6 +257,14 @@ async fn handle_client_command(cmd: ClientMessage, state: &AppState) {
             state.open_tab_group(&session_name).await;
             return;
         }
+        ClientMessage::SetBlocker { session_name, note } => {
+            // Purely client-side state: no tmux mutation, so re-listing
+            // sessions would be wasted work — just push the new card out.
+            if state.set_blocker(&session_name, note).await {
+                state.broadcast().await;
+            }
+            return;
+        }
     };
     if let Err(e) = result {
         warn!("command failed: {e}");

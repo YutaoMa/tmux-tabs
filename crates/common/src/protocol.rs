@@ -5,11 +5,27 @@ use crate::model::SessionEntry;
 /// Client → Server
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
-    Register { pane_id: String },
-    SwitchSession { session_name: String },
-    RenameSession { old_name: String, new_name: String },
-    CloseSession { session_name: String },
-    OpenTabGroup { session_name: String },
+    Register {
+        pane_id: String,
+    },
+    SwitchSession {
+        session_name: String,
+    },
+    RenameSession {
+        old_name: String,
+        new_name: String,
+    },
+    CloseSession {
+        session_name: String,
+    },
+    OpenTabGroup {
+        session_name: String,
+    },
+    /// Set (`Some`) or clear (`None`) the external-blocker note for a session.
+    SetBlocker {
+        session_name: String,
+        note: Option<String>,
+    },
 }
 
 /// Server → Client

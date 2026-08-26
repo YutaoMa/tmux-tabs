@@ -57,6 +57,11 @@ async fn async_main(args: Vec<String>) -> anyhow::Result<()> {
         Subcommand::Kill => cmd_kill(),
         Subcommand::Switch { index } => cmd_switch(index).await,
         Subcommand::Close { session } => cmd_close(session).await,
+        Subcommand::Block {
+            session,
+            clear,
+            note,
+        } => cmd_block(session, clear, note).await,
         Subcommand::OpenTabs { session } => cmd_open_tabs(session).await,
         Subcommand::Capture { pane, probe, lines } => {
             capture::cmd_capture(pane, probe, lines).await
@@ -75,6 +80,11 @@ enum Subcommand {
     },
     Close {
         session: Option<String>,
+    },
+    Block {
+        session: Option<String>,
+        clear: bool,
+        note: Option<String>,
     },
     OpenTabs {
         session: Option<String>,
@@ -109,6 +119,14 @@ impl TryFrom<&[String]> for Subcommand {
                 let session = parse_session_flag(&args[1..]);
                 Ok(Self::Close { session })
             }
+            Some("block") => {
+                let (session, clear, note) = parse_block_flags(&args[1..]);
+                Ok(Self::Block {
+                    session,
+                    clear,
+                    note,
+                })
+            }
             Some("open-tabs") => {
                 let session = parse_session_flag(&args[1..]);
                 Ok(Self::OpenTabs { session })
@@ -131,6 +149,34 @@ fn parse_session_flag(args: &[String]) -> Option<String> {
         i += 1;
     }
     None
+}
+
+/// Parse `block` arguments: `[--session NAME] [--clear] [note words…]`.
+/// Free-standing words are joined into the note so the shell doesn't have to
+/// quote it.
+fn parse_block_flags(args: &[String]) -> (Option<String>, bool, Option<String>) {
+    let mut session = None;
+    let mut clear = false;
+    let mut words: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--session" => {
+                session = args.get(i + 1).cloned().filter(|s| !s.is_empty());
+                i += 2;
+            }
+            "--clear" => {
+                clear = true;
+                i += 1;
+            }
+            other => {
+                words.push(other);
+                i += 1;
+            }
+        }
+    }
+    let note = (!words.is_empty()).then(|| words.join(" "));
+    (session, clear, note)
 }
 
 fn parse_capture_flags(args: &[String]) -> anyhow::Result<(Option<String>, bool, u32)> {
@@ -273,6 +319,110 @@ async fn cmd_close(session: Option<String>) -> anyhow::Result<()> {
     let mut sink = Vec::new();
     let _ = reader.read_to_end(&mut sink).await;
     Ok(())
+}
+
+/// Mark the target session blocked on something outside the terminal, or
+/// clear an existing mark. Bound to a tmux key so a blocker can be recorded
+/// from whatever pane you're in when you discover it, without first hopping to
+/// the sidebar.
+///
+/// With no note and no `--clear` it prompts, which is what makes it usable
+/// from `display-popup -E`; the prompt toggles, mirroring `b` in the sidebar.
+async fn cmd_block(
+    session: Option<String>,
+    clear: bool,
+    note: Option<String>,
+) -> anyhow::Result<()> {
+    let Some(session_name) = resolve_target_session(session).await else {
+        eprintln!("could not resolve target session (not in tmux?)");
+        std::process::exit(2);
+    };
+
+    let Some((_reader, mut writer, sessions)) = open_state_conn().await else {
+        eprintln!("tmux-tabs server is not running");
+        std::process::exit(1);
+    };
+
+    let existing = sessions
+        .iter()
+        .find(|e| e.session.name == session_name)
+        .and_then(|e| e.blocker.clone());
+
+    let note = if clear {
+        if existing.is_none() {
+            println!("'{session_name}' is not blocked.");
+            return Ok(());
+        }
+        None
+    } else if let Some(note) = note {
+        Some(clamp_note(&note))
+    } else {
+        match prompt_blocker(&session_name, existing.as_deref()) {
+            // Nothing to say and nothing to clear — leave state untouched
+            // rather than writing a blank overlay.
+            PromptOutcome::Cancel => return Ok(()),
+            PromptOutcome::Clear => None,
+            PromptOutcome::Note(note) => Some(note),
+        }
+    };
+
+    let msg = Envelope::Client(ClientMessage::SetBlocker {
+        session_name,
+        note: note.clone(),
+    });
+    if let Err(e) = write_frame(&mut writer, &msg).await {
+        eprintln!("failed to send: {e}");
+        return Ok(());
+    }
+    // The popup closes the moment this returns, so confirm what landed.
+    match note {
+        Some(note) => println!("Blocked: {note}"),
+        None => println!("Blocker cleared."),
+    }
+    Ok(())
+}
+
+enum PromptOutcome {
+    Cancel,
+    Clear,
+    Note(String),
+}
+
+/// Interactive half of `cmd_block`. Returns what the user chose to do.
+fn prompt_blocker(session_name: &str, existing: Option<&str>) -> PromptOutcome {
+    if let Some(existing) = existing {
+        println!("'{session_name}' is blocked on:");
+        println!("  {existing}");
+        print!("Clear it? (y/n) ");
+        std::io::stdout().flush().ok();
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).ok();
+        return if matches!(answer.trim(), "y" | "Y" | "yes") {
+            PromptOutcome::Clear
+        } else {
+            println!("Left as-is.");
+            PromptOutcome::Cancel
+        };
+    }
+
+    println!("Block '{session_name}' on what? (empty to cancel)");
+    print!("> ");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).ok();
+    let note = clamp_note(&line);
+    if note.is_empty() {
+        println!("Cancelled.");
+        return PromptOutcome::Cancel;
+    }
+    PromptOutcome::Note(note)
+}
+
+/// Trim a note and cap it to the sidebar's input budget. Measured in terminal
+/// columns, so a note reads the same here as it will on the card; the overlay
+/// ellipsizes anything that still doesn't fit once wrapped.
+fn clamp_note(note: &str) -> String {
+    ui::truncate_note(note.trim())
 }
 
 /// Re-open the Chrome tab group for the target session (the current session
@@ -453,4 +603,78 @@ fn cmd_kill() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(s: &str) -> Vec<String> {
+        s.split_whitespace().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn block_parses_a_bare_note_without_quoting() {
+        let (session, clear, note) = parse_block_flags(&argv("waiting on jane"));
+        assert!(session.is_none());
+        assert!(!clear);
+        assert_eq!(note.as_deref(), Some("waiting on jane"));
+    }
+
+    #[test]
+    fn block_parses_flags_alongside_a_note() {
+        let (session, clear, note) = parse_block_flags(&argv("--session api ask bob"));
+        assert_eq!(session.as_deref(), Some("api"));
+        assert!(!clear);
+        assert_eq!(note.as_deref(), Some("ask bob"));
+    }
+
+    #[test]
+    fn block_recognises_the_clear_flag() {
+        let (_, clear, note) = parse_block_flags(&argv("--clear"));
+        assert!(clear);
+        assert!(note.is_none());
+    }
+
+    /// No note and no flag is the popup path — it must not be mistaken for a
+    /// request to store an empty note.
+    #[test]
+    fn block_with_no_arguments_asks_for_a_prompt() {
+        let (session, clear, note) = parse_block_flags(&[]);
+        assert!(session.is_none() && !clear && note.is_none());
+    }
+
+    #[test]
+    fn block_subcommand_dispatches() {
+        let args = argv("block --clear --session api");
+        match Subcommand::try_from(&args[..]).expect("parse") {
+            Subcommand::Block {
+                session,
+                clear,
+                note,
+            } => {
+                assert_eq!(session.as_deref(), Some("api"));
+                assert!(clear);
+                assert!(note.is_none());
+            }
+            _ => panic!("expected the block subcommand"),
+        }
+    }
+
+    #[test]
+    fn notes_are_trimmed_and_capped_to_what_the_overlay_can_show() {
+        assert_eq!(clamp_note("  ask jane \n"), "ask jane");
+        let long = "x".repeat(ui::BLOCKER_MAX_CELLS + 25);
+        assert_eq!(clamp_note(&long).chars().count(), ui::BLOCKER_MAX_CELLS);
+    }
+
+    /// Capping by chars, not bytes: a multi-byte note must not be split
+    /// mid-character.
+    #[test]
+    fn capping_a_multibyte_note_does_not_corrupt_it() {
+        let long = "é".repeat(ui::BLOCKER_MAX_CELLS + 10);
+        let capped = clamp_note(&long);
+        assert_eq!(capped.chars().count(), ui::BLOCKER_MAX_CELLS);
+        assert!(capped.chars().all(|c| c == 'é'));
+    }
 }

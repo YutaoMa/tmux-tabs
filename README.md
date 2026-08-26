@@ -119,6 +119,7 @@ bind-key -T tabs_mode 8 run-shell "tmux-tabs switch 8"
 bind-key -T tabs_mode 9 run-shell "tmux-tabs switch 9"
 bind-key -T tabs_mode x display-popup -E "tmux-tabs close"
 bind-key -T tabs_mode o run-shell "tmux-tabs open-tabs --session '#S'"
+bind-key -T tabs_mode b display-popup -E -w 64 -h 8 "tmux-tabs block"
 ```
 
 Reload tmux (`prefix + :source-file ~/.tmux.conf`) and start a new session — the sidebar should appear on the left.
@@ -201,12 +202,14 @@ cp .claude/commands/grab.md ~/.claude/commands/
 Mouse (works regardless of which pane has focus):
 
 - **Click** a card → switch to that session
+- **Click** the **`✕`** on a blocker overlay → clear that blocker
 - **Scroll wheel** → switch to the previous/next session
 
 From any pane (key tables):
 
 - **`prefix + g + 1..9`** → jump to the Nth session
 - **`prefix + g + x`** → close the current session (popup confirms)
+- **`prefix + g + b`** → mark the current session blocked (popup prompts; press again to clear)
 - **`prefix + g + o`** → reopen the current session's Chrome tab group (if you closed it manually)
 
 Inside the sidebar pane (when focused):
@@ -214,6 +217,7 @@ Inside the sidebar pane (when focused):
 - **`j` / `k`** or **`↓` / `↑`** → move selection
 - **`Enter`** → switch to selected session
 - **`r`** → rename current/selected session
+- **`b`** → mark current/selected session blocked (press again to clear)
 - **`Esc`** → clear selection
 - **`q`** → close the sidebar
 
@@ -224,9 +228,47 @@ and `Enter` commits it.
   <img src="docs/images/rename.png" alt="Pressing r opens the rename prompt, the name is edited a keystroke at a time, and Enter commits it" width="260">
 </p>
 
+### Blocked on something outside the terminal
+
+Some work stalls on a person, not on the agent — a question in Slack, a review,
+an access request. The session looks idle, so it's easy to come back to it
+expecting a prompt and rediscover the wait instead.
+
+`b` marks a session blocked with a short note. The card's detail rows are
+replaced by an overlay, so the reason is legible at a glance rather than being
+one more line to read:
+
+```
+¹api-gateway         45%
+╭ BLOCKED ────────────✕╮
+│ waiting on @jane re: │
+│ cookie ttl           │
+╰──────────────────────╯
+```
+
+The header stays put so the session is still identifiable and `prefix + g + N`
+still means the same thing. If the agent raises a prompt while a session is
+blocked, a `?` appears on the bottom border — the overlay covers the status
+line, so it has to say when there's something under it worth looking at.
+
+Clear a blocker with `b` again or by clicking the `✕`. Blockers are notes to
+yourself for the current sitting: nothing expires them, and they don't survive
+a daemon restart.
+
+You usually discover a blocker while working, not while looking at the sidebar,
+so `prefix + g + b` opens the same prompt from any pane. On an already blocked
+session it offers to clear instead — one key covers both directions:
+
+```
+$ tmux-tabs block                      # prompt (used by the popup binding)
+$ tmux-tabs block waiting on @jane     # set directly, no quoting needed
+$ tmux-tabs block --clear              # clear
+$ tmux-tabs block --session api ...    # target a session other than the current one
+```
+
 The footer tracks what the sidebar is doing: the keybind hints while you browse,
-the prompt while you rename, and an orange notice if the daemon goes away, so
-stale cards are never mistaken for live ones.
+the prompt while you rename or note a blocker, and an orange notice if the
+daemon goes away, so stale cards are never mistaken for live ones.
 
 <p align="center">
   <img src="docs/images/sidebar-states.png" alt="Selection, rename prompt, and the server-offline notice" width="760">

@@ -57,6 +57,12 @@ pub struct SessionEntry {
     /// Context window usage percentage (0–100).
     #[serde(default)]
     pub context_pct: Option<u8>,
+    /// Free-form note recording that this session is blocked on something
+    /// outside the terminal (a Slack thread, a review, a ticket). Only ever
+    /// set by a human; the server never writes one on its own, and only
+    /// drops it when the session itself disappears.
+    #[serde(default)]
+    pub blocker: Option<String>,
     #[serde(default)]
     pub git: GitInfo,
     #[serde(default)]
@@ -111,6 +117,7 @@ mod tests {
             },
             topic: None,
             context_pct: None,
+            blocker: None,
             git: GitInfo::default(),
             browser: None,
         };
